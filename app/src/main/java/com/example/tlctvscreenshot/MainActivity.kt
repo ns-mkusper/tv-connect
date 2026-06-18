@@ -1,10 +1,15 @@
 package com.example.tlctvscreenshot
 
-import android.graphics.Bitmap
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Bundle
+import android.net.Uri
 import android.os.Build
+import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,10 +20,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -26,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,6 +48,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -53,17 +61,19 @@ import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.text.DateFormat
 import java.util.Collections
+import java.util.Date
 import java.util.UUID
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 private const val TCL_COMMAND_PORT = 6553
 private const val TCL_DISCOVERY_PORT = 0x1989
@@ -127,7 +137,9 @@ private fun TlcTvScreenshotApp() {
 private fun ScreenshotWorkbench() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var tvIp by remember { mutableStateOf("") }
+    val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
+    var selectedDevice by remember { mutableStateOf(loadSelectedTclDevice(context)) }
+    var tvIp by remember { mutableStateOf(selectedDevice?.ip.orEmpty()) }
     val androidId = remember {
         Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
     }
@@ -149,6 +161,80 @@ private fun ScreenshotWorkbench() {
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
     var discoveryStatus by remember { mutableStateOf("Idle. Uses TCL UDP discovery on port $TCL_DISCOVERY_PORT, then verifies TCP $TCL_COMMAND_PORT.") }
     var isDiscovering by remember { mutableStateOf(false) }
+    var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
+    var selectedScreenshot by remember { mutableStateOf(screenshots.firstOrNull()) }
+    var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { BitmapFactory.decodeFile(it.absolutePath) }) }
+    var galleryStatus by remember {
+        mutableStateOf(
+            if (screenshots.isEmpty()) "No saved screenshots yet." else "Loaded ${screenshots.size} saved screenshot(s)."
+        )
+    }
+    var isExporting by remember { mutableStateOf(false) }
+    var deleteCandidate by remember { mutableStateOf<File?>(null) }
+
+    fun rememberSelectedDevice(device: TclDiscoveryDevice) {
+        val remembered = device.toSelectedDevice()
+        selectedDevice = remembered
+        tvIp = remembered.ip
+        saveSelectedTclDevice(context, remembered)
+    }
+
+    fun refreshGallery(preferredFile: File? = selectedScreenshot) {
+        val loaded = loadScreenshotFiles(context)
+        screenshots = loaded
+        val nextSelected = preferredFile?.takeIf { it.exists() } ?: loaded.firstOrNull()
+        selectedScreenshot = nextSelected
+        galleryBitmap = nextSelected?.let { BitmapFactory.decodeFile(it.absolutePath) }
+        galleryStatus = if (loaded.isEmpty()) "No saved screenshots yet." else "Loaded ${loaded.size} saved screenshot(s)."
+    }
+
+    fun startDiscovery() {
+        isDiscovering = true
+        discoveredDevices = emptyList()
+        discoveryStatus = "Discovering TVs on the local network..."
+        coroutineScope.launch {
+            runCatching {
+                discoverTclTvs(
+                    context = context.applicationContext,
+                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                    uuid = tclUuid.ifBlank { androidId }
+                )
+            }.onSuccess { devices ->
+                discoveredDevices = devices
+                devices.firstOrNull()?.let(::rememberSelectedDevice)
+                discoveryStatus = if (devices.isEmpty()) {
+                    "No TVs found. Confirm the phone and TV are on the same Wi-Fi subnet, or enter the TV IP manually below."
+                } else {
+                    "Found ${devices.size} TV candidate(s). The first one was selected and remembered."
+                }
+            }.onFailure { error ->
+                discoveryStatus = "Discovery failed: ${error.message ?: error::class.java.simpleName}"
+            }
+            isDiscovering = false
+        }
+    }
+
+    deleteCandidate?.let { file ->
+        AlertDialog(
+            onDismissRequest = { deleteCandidate = null },
+            title = { Text("Delete screenshot?") },
+            text = { Text("Delete ${file.name} from this app's saved screenshots?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val deleted = runCatching { file.delete() }.getOrDefault(false)
+                        deleteCandidate = null
+                        refreshGallery()
+                        galleryStatus = if (deleted) "Deleted ${file.name}." else "Could not delete ${file.name}."
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -174,36 +260,13 @@ private fun ScreenshotWorkbench() {
                     text = "Searches the local network using TCL UDP discovery and verifies candidates with the TV's TCP screenshot control port. If UDP announcements are missed, it falls back to a local subnet scan.",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Button(
-                    enabled = !isDiscovering,
-                    onClick = {
-                        isDiscovering = true
-                        discoveredDevices = emptyList()
-                        discoveryStatus = "Discovering TVs on the local network..."
-                        coroutineScope.launch {
-                            runCatching {
-                                discoverTclTvs(
-                                    context = context.applicationContext,
-                                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
-                                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                                    uuid = tclUuid.ifBlank { androidId }
-                                )
-                            }.onSuccess { devices ->
-                                discoveredDevices = devices
-                                devices.firstOrNull()?.let { device -> tvIp = device.ip }
-                                discoveryStatus = if (devices.isEmpty()) {
-                                    "No TVs found. Confirm the phone and TV are on the same Wi-Fi subnet, or enter the TV IP manually below."
-                                } else {
-                                    "Found ${devices.size} TV candidate(s). The first one was selected automatically."
-                                }
-                            }.onFailure { error ->
-                                discoveryStatus = "Discovery failed: ${error.message ?: error::class.java.simpleName}"
-                            }
-                            isDiscovering = false
-                        }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
+                        Text(if (isDiscovering) "Discovering..." else "Discover TV")
                     }
-                ) {
-                    Text(if (isDiscovering) "Discovering..." else "Discover TV")
+                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
+                        Text("Rediscover")
+                    }
                 }
                 Text(discoveryStatus, style = MaterialTheme.typography.bodySmall)
                 discoveredDevices.forEach { device ->
@@ -221,10 +284,46 @@ private fun ScreenshotWorkbench() {
                             device.handshake?.let { handshake ->
                                 Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
-                            Button(onClick = { tvIp = device.ip }) {
+                            Button(onClick = { rememberSelectedDevice(device) }) {
                                 Text("Use ${device.ip}")
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Selected TV", style = MaterialTheme.typography.titleLarge)
+                val current = selectedDevice
+                if (current == null) {
+                    Text("No remembered TV selected.", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text("${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
+                    Text("MAC: ${current.mac ?: "unknown"}")
+                    Text("Source: ${current.source ?: "unknown"}")
+                    Text("Algorithm: ${current.algorithmType ?: "unknown"}")
+                    Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}")
+                    current.handshake?.let { handshake ->
+                        Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
+                        Text("Rediscover")
+                    }
+                    Button(
+                        enabled = selectedDevice != null,
+                        onClick = {
+                            forgetSelectedTclDevice(context)
+                            selectedDevice = null
+                            tvIp = ""
+                            discoveredDevices = emptyList()
+                            discoveryStatus = "Forgot remembered TV."
+                        }
+                    ) {
+                        Text("Forget TV")
                     }
                 }
             }
@@ -261,11 +360,15 @@ private fun ScreenshotWorkbench() {
                                     phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
                                     uuid = tclUuid.ifBlank { androidId },
                                     phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                                    imageDirectory = File(context.filesDir, "TCast/Images")
+                                    imageDirectory = screenshotDirectory
                                 )
                             }.onSuccess { result ->
                                 tclBitmap = result.bitmap
-                                tclStatus = "Captured ${result.byteCount} bytes and saved to ${result.file.absolutePath}."
+                                selectedScreenshot = result.file
+                                galleryBitmap = result.bitmap
+                                screenshots = loadScreenshotFiles(context)
+                                tclStatus = "Captured ${result.byteCount} bytes and added ${result.file.name} to the gallery."
+                                galleryStatus = "Selected latest capture: ${result.file.name}."
                             }.onFailure { error ->
                                 tclStatus = "Screenshot failed: ${error.message ?: error::class.java.simpleName}"
                             }
@@ -289,10 +392,77 @@ private fun ScreenshotWorkbench() {
             }
         }
 
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("3. Screenshot gallery", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Browse captures saved by this app, share through Android Sharesheet, export to Pictures, or delete with confirmation.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { refreshGallery() }) { Text("Refresh") }
+                    Button(
+                        enabled = selectedScreenshot != null,
+                        onClick = { selectedScreenshot?.let { shareScreenshot(context, it) } }
+                    ) { Text("Share selected") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = selectedScreenshot != null && !isExporting,
+                        onClick = {
+                            val file = selectedScreenshot ?: return@Button
+                            isExporting = true
+                            galleryStatus = "Exporting ${file.name} to Pictures..."
+                            coroutineScope.launch {
+                                runCatching { exportScreenshotToPictures(context, file) }
+                                    .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
+                                    .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
+                                isExporting = false
+                            }
+                        }
+                    ) { Text(if (isExporting) "Exporting..." else "Export selected") }
+                    Button(
+                        enabled = selectedScreenshot != null,
+                        onClick = { selectedScreenshot?.let { deleteCandidate = it } }
+                    ) { Text("Delete selected") }
+                }
+                Text(galleryStatus, style = MaterialTheme.typography.bodySmall)
+                selectedScreenshot?.let { file ->
+                    Text("Selected: ${file.name} (${formatFileSize(file.length())}, ${formatTimestamp(file.lastModified())})")
+                }
+                galleryBitmap?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Selected saved screenshot preview",
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                    )
+                }
+                screenshots.forEach { file ->
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(file.name, fontWeight = FontWeight.Bold)
+                            Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = {
+                                    selectedScreenshot = file
+                                    galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                    galleryStatus = "Opened ${file.name}."
+                                }) { Text("Open") }
+                                Button(onClick = { shareScreenshot(context, file) }) { Text("Share") }
+                                Button(onClick = { deleteCandidate = file }) { Text("Delete") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("3. Remote control", style = MaterialTheme.typography.titleLarge)
+                Text("4. Remote control", style = MaterialTheme.typography.titleLarge)
                 Text(
                     text = "Sends button commands to the selected TV over the same TCP control transport.",
                     style = MaterialTheme.typography.bodyMedium
@@ -414,7 +584,6 @@ private fun ScreenshotWorkbench() {
     }
 }
 
-
 @Composable
 private fun RemoteButton(
     label: String,
@@ -452,6 +621,123 @@ private data class TclDiscoveryDevice(
     val algorithmType: String? = null,
     val handshake: String? = null
 )
+
+private data class SelectedTclDevice(
+    val ip: String,
+    val name: String,
+    val mac: String?,
+    val source: String?,
+    val algorithmType: String?,
+    val handshake: String?,
+    val lastVerifiedAtMillis: Long
+)
+
+private fun loadSelectedTclDevice(context: Context): SelectedTclDevice? {
+    val preferences = context.getSharedPreferences("selected_tcl_device", android.content.Context.MODE_PRIVATE)
+    val ip = preferences.getString("ip", null)?.takeIf { it.isNotBlank() } ?: return null
+    return SelectedTclDevice(
+        ip = ip,
+        name = preferences.getString("name", null).orEmpty(),
+        mac = preferences.getString("mac", null),
+        source = preferences.getString("source", null),
+        algorithmType = preferences.getString("algorithm_type", null),
+        handshake = preferences.getString("handshake", null),
+        lastVerifiedAtMillis = preferences.getLong("last_verified_at", 0L).takeIf { it > 0L } ?: System.currentTimeMillis()
+    )
+}
+
+private fun saveSelectedTclDevice(context: Context, device: SelectedTclDevice) {
+    context.getSharedPreferences("selected_tcl_device", android.content.Context.MODE_PRIVATE)
+        .edit()
+        .putString("ip", device.ip)
+        .putString("name", device.name)
+        .putString("mac", device.mac)
+        .putString("source", device.source)
+        .putString("algorithm_type", device.algorithmType)
+        .putString("handshake", device.handshake)
+        .putLong("last_verified_at", device.lastVerifiedAtMillis)
+        .apply()
+}
+
+private fun forgetSelectedTclDevice(context: Context) {
+    context.getSharedPreferences("selected_tcl_device", android.content.Context.MODE_PRIVATE)
+        .edit()
+        .clear()
+        .apply()
+}
+
+private fun TclDiscoveryDevice.toSelectedDevice(verifiedAtMillis: Long = System.currentTimeMillis()): SelectedTclDevice {
+    return SelectedTclDevice(
+        ip = ip,
+        name = name,
+        mac = mac,
+        source = source,
+        algorithmType = algorithmType,
+        handshake = handshake,
+        lastVerifiedAtMillis = verifiedAtMillis
+    )
+}
+
+private fun loadScreenshotFiles(context: Context): List<File> {
+    val directory = File(context.filesDir, "TCast/Images")
+    return directory.listFiles()
+        ?.filter { file -> file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "bin") }
+        ?.sortedByDescending { it.lastModified() }
+        .orEmpty()
+}
+
+private fun shareScreenshot(context: Context, file: File) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = imageMimeType(file)
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Share screenshot"))
+}
+
+private suspend fun exportScreenshotToPictures(context: Context, file: File): Uri = withContext(Dispatchers.IO) {
+    val resolver = context.contentResolver
+    val values = ContentValues().apply {
+        put(MediaStore.Images.Media.DISPLAY_NAME, file.name)
+        put(MediaStore.Images.Media.MIME_TYPE, imageMimeType(file))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/TCL TV Screenshot")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+    }
+    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("Could not create Pictures export entry")
+    runCatching {
+        resolver.openOutputStream(uri)?.use { output -> file.inputStream().use { input -> input.copyTo(output) } }
+            ?: error("Could not open Pictures export stream")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val completeValues = ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
+            resolver.update(uri, completeValues, null, null)
+        }
+    }.onFailure { error ->
+        resolver.delete(uri, null, null)
+        throw error
+    }
+    uri
+}
+
+private fun imageMimeType(file: File): String = when (file.extension.lowercase()) {
+    "jpg", "jpeg" -> "image/jpeg"
+    "png" -> "image/png"
+    else -> "application/octet-stream"
+}
+
+private fun formatTimestamp(millis: Long): String {
+    if (millis <= 0L) return "unknown"
+    return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(millis))
+}
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
+}
 
 private data class TclDiscoveryPacket(
     val version: String,
