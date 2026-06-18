@@ -12,9 +12,12 @@ LABEL=${LABEL:-compose-workbench}
 UI_TEST_MODE=${UI_TEST_MODE:-1}
 
 mkdir -p "$(dirname "$OUT")"
+test -s "$APK"
+ls -lh "$APK"
 adb wait-for-device
 adb devices -l
-adb install -r "$APK"
+adb shell getprop sys.boot_completed
+timeout 180 adb install -r -g -t "$APK"
 adb shell pm clear "$PACKAGE" >/dev/null 2>&1 || true
 adb shell am force-stop "$PACKAGE" || true
 if [[ "$UI_TEST_MODE" == "1" ]]; then

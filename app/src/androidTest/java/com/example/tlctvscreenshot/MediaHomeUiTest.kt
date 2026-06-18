@@ -105,10 +105,10 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("discovered_device_card").assertIsDisplayed()
         assertAnyTextDisplayed("Test Living Room TV — 192.0.2.10")
         composeRule.onNodeWithTag("use_discovered_device_button").performClick()
-        assertAnyTextDisplayed("Selected: Test Living Room TV — 192.0.2.10")
+        assertAnyTextExists("Selected: Test Living Room TV — 192.0.2.10")
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
-        assertAnyTextDisplayed("TV connected")
+        assertAnyTextExists("TV connected")
     }
 
     @Test

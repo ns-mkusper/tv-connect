@@ -171,6 +171,7 @@ jobs:
           sudo apt-get install -y python3-pil
 
       - name: Capture before and after emulator screenshots
+        timeout-minutes: 20
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
@@ -181,9 +182,10 @@ jobs:
           emulator-boot-timeout: 480
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            bash -euo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/compose-workbench.png" LABEL="before" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
+            bash -eo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/compose-workbench.png" LABEL="before" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
             adb shell am force-stop com.example.tlctvscreenshot || true
-            bash -euo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/compose-workbench.png" LABEL="after" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
+            adb uninstall com.example.tlctvscreenshot || true
+            bash -eo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/compose-workbench.png" LABEL="after" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
 
       - name: Compare Android emulator screenshots
         if: always()
