@@ -101,8 +101,7 @@ private const val HTTP_CONNECT_TIMEOUT_MS = 1_000
 private const val HTTP_READ_TIMEOUT_MS = 10_000
 private const val HTTP_DOWNLOAD_ATTEMPTS = 30
 private const val HTTP_DOWNLOAD_RETRY_DELAY_MS = 250L
-private const val TCL_SCREENSHOT_SHOT_COUNT = 2
-private const val TCL_SCREENSHOT_SHOT_GAP_MS = 500L
+private const val TCL_SCREENSHOT_SHOT_COUNT = 1
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
 
@@ -291,7 +290,20 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                 galleryBitmap = result.bitmap
                 screenshots = loadScreenshotFiles(context)
                 tclStatus = "Captured ${formatFileSize(result.byteCount.toLong())} from TV."
-                galleryStatus = "Added ${result.file.name} to Gallery."
+                galleryStatus = "Added ${result.file.name} to Gallery. Publishing to Pictures..."
+                coroutineScope.launch {
+                    runCatching { exportScreenshotToPictures(context.applicationContext, result.file) }
+                        .onSuccess {
+                            if (selectedScreenshot == result.file) {
+                                galleryStatus = "Added ${result.file.name} to Gallery and Pictures."
+                            }
+                        }
+                        .onFailure { error ->
+                            if (selectedScreenshot == result.file) {
+                                galleryStatus = "Added ${result.file.name} to Gallery. Pictures publish failed: ${error.message ?: error::class.java.simpleName}"
+                            }
+                        }
+                }
             }.onFailure { error ->
                 tclStatus = "Screenshot failed: ${error.message ?: error::class.java.simpleName}"
             }
@@ -1092,9 +1104,14 @@ private fun shareScreenshot(context: Context, file: File) {
 
 private suspend fun exportScreenshotToPictures(context: Context, file: File): Uri = withContext(Dispatchers.IO) {
     val resolver = context.contentResolver
+    val nowMillis = System.currentTimeMillis()
     val values = ContentValues().apply {
         put(MediaStore.Images.Media.DISPLAY_NAME, file.name)
+        put(MediaStore.Images.Media.TITLE, file.nameWithoutExtension)
         put(MediaStore.Images.Media.MIME_TYPE, imageMimeType(file))
+        put(MediaStore.Images.Media.DATE_TAKEN, nowMillis)
+        put(MediaStore.Images.Media.DATE_ADDED, nowMillis / 1_000L)
+        put(MediaStore.Images.Media.DATE_MODIFIED, nowMillis / 1_000L)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/TCL TV Screenshot")
             put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -1389,12 +1406,7 @@ private suspend fun captureTcl6553Screenshot(
             }
             val shotUrl = shotFields[2]
             shotUrls += shotUrl
-            if (shotNumber == 1 && TCL_SCREENSHOT_SHOT_COUNT > 1) {
-                log.appendLine("warm-up url $shotUrl (not downloaded; TV may return a stale HTTP port here)")
-                Thread.sleep(TCL_SCREENSHOT_SHOT_GAP_MS)
-            } else {
-                log.appendLine("download url $shotUrl")
-            }
+            log.appendLine("download url $shotUrl")
         }
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
