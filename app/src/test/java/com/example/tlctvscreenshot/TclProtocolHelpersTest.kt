@@ -7,6 +7,7 @@ import java.io.DataOutputStream
 import java.io.File
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,24 @@ class TclProtocolHelpersTest {
         val decrypted = invoke("decryptTclAes", raw) as ByteArray
 
         assertEquals(text, decrypted.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun preferredScreenshotPortsLeadFallbackScanOrder() {
+        val order = invoke("prioritizedPortOrder", 4, 32769, listOf(32770, 32768, 32770, 9999)) as IntArray
+
+        assertEquals(4, order.size)
+        assertEquals(32770, order[0])
+        assertEquals(32768, order[1])
+        assertFalse(order.contains(9999))
+    }
+
+    @Test
+    fun staleScreenshotPortIsNotPreferredDuringFallbackScan() {
+        val order = invoke("prioritizedPortOrder", 4, 32770, listOf(32770, 32768)) as IntArray
+
+        assertEquals(32768, order[0])
+        assertFalse(order.take(1).contains(32770))
     }
 
     @Test

@@ -45,6 +45,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +79,7 @@ import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.util.ArrayDeque
 import java.text.DateFormat
 import java.util.Collections
 import java.util.Date
@@ -90,10 +93,14 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -109,15 +116,16 @@ private const val HTTP_CONNECT_TIMEOUT_MS = 1_000
 private const val HTTP_READ_TIMEOUT_MS = 10_000
 private const val HTTP_DOWNLOAD_ATTEMPTS = 30
 private const val HTTP_DOWNLOAD_RETRY_DELAY_MS = 250L
-private const val HTTP_DIRECT_ATTEMPTS_BEFORE_PORT_SCAN = 2
+private const val HTTP_DIRECT_ATTEMPTS_BEFORE_PORT_SCAN = 1
 private const val HTTP_PORT_SCAN_FIRST_PORT = 32768
 private const val HTTP_PORT_SCAN_LAST_PORT = 60999
 private const val HTTP_PORT_SCAN_CONNECT_TIMEOUT_MS = 75
 private const val HTTP_PORT_SCAN_READ_TIMEOUT_MS = 1_000
 private const val HTTP_PORT_SCAN_PARALLELISM = 384
-private const val HTTP_PORT_SCAN_START_DELAY_MS = 350L
+private const val HTTP_PORT_SCAN_START_DELAY_MS = 150L
 private const val HTTP_PORT_SCAN_TIMEOUT_MS = 12_000L
 private const val TCL_SCREENSHOT_SHOT_COUNT = 1
+private const val TCL_SESSION_HEARTBEAT_INTERVAL_MS = 15_000L
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
 private const val LOG_TAG = "TlcTvCapture"
@@ -175,6 +183,10 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
+    val tclSessionManager = remember { Tcl6553SessionManager() }
+    DisposableEffect(Unit) {
+        onDispose { tclSessionManager.close() }
+    }
     var selectedDevice by remember { mutableStateOf(loadSelectedTclDevice(context)) }
     var tvIp by remember { mutableStateOf(selectedDevice?.ip.orEmpty()) }
     val androidId = remember {
@@ -218,6 +230,24 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         selectedDevice = remembered
         tvIp = remembered.ip
         saveSelectedTclDevice(context, remembered)
+    }
+
+    val warmTvIp = currentTvIp().trim()
+    LaunchedEffect(testMode, warmTvIp, tclPhoneName, tclUuid, tclPhoneImei) {
+        if (testMode || warmTvIp.isBlank()) {
+            tclSessionManager.clear()
+        } else {
+            tclSessionManager.configure(
+                scope = coroutineScope,
+                config = Tcl6553SessionConfig(
+                    tvIp = warmTvIp,
+                    port = TCL_COMMAND_PORT,
+                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                    uuid = tclUuid.ifBlank { androidId },
+                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } }
+                )
+            )
+        }
     }
 
     fun refreshGallery(preferredFile: File? = selectedScreenshot) {
@@ -301,7 +331,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
                     uuid = tclUuid.ifBlank { androidId },
                     phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                    imageDirectory = screenshotDirectory
+                    imageDirectory = screenshotDirectory,
+                    sessionManager = tclSessionManager
                 )
             }.onSuccess { result ->
                 selectedScreenshot = result.file
@@ -997,6 +1028,14 @@ private data class Tcl6553ScreenshotResult(
     val log: String
 )
 
+private data class Tcl6553SessionConfig(
+    val tvIp: String,
+    val port: Int,
+    val phoneName: String,
+    val uuid: String,
+    val phoneImei: String
+)
+
 private fun testTclDevice(): TclDiscoveryDevice = TclDiscoveryDevice(
     ip = "192.0.2.10",
     name = "Test Living Room TV",
@@ -1378,15 +1417,185 @@ private fun verifyTcl6553Device(ip: String, phoneName: String, uuid: String): Tc
     }.getOrNull()
 }
 
+private class Tcl6553SessionManager {
+    private val stateLock = Any()
+    private var config: Tcl6553SessionConfig? = null
+    private var scope: CoroutineScope? = null
+    private var session: Tcl6553WarmSession? = null
+    private var warmJob: Job? = null
+    private var keepAliveJob: Job? = null
+
+    fun configure(scope: CoroutineScope, config: Tcl6553SessionConfig) {
+        synchronized(stateLock) {
+            this.scope = scope
+            if (this.config == config && (session != null || warmJob?.isActive == true)) return
+            closeLocked()
+            this.config = config
+            startWarmLocked(scope, config)
+        }
+    }
+
+    private fun startWarmLocked(scope: CoroutineScope, config: Tcl6553SessionConfig) {
+        warmJob?.cancel()
+        warmJob = scope.launch(Dispatchers.IO) {
+            val log = StringBuilder()
+            val opened = runCatching { openTcl6553Session(config, log) }
+                .onFailure { error -> Log.i(LOG_TAG, "warm session failed: ${error.message ?: error::class.java.simpleName}") }
+                .getOrNull()
+            synchronized(stateLock) {
+                if (this@Tcl6553SessionManager.config != config) {
+                    opened?.close()
+                } else if (opened != null) {
+                    session = opened
+                    startKeepAliveLocked(scope)
+                    Log.i(LOG_TAG, "${System.currentTimeMillis()} warm session ready")
+                }
+            }
+        }
+    }
+
+    suspend fun captureScreenshotUrl(log: StringBuilder): String? = withContext(Dispatchers.IO) {
+        val opened = synchronized(stateLock) { session }
+        if (opened == null) {
+            log.protocolLog("warm session unavailable; using cold capture path")
+            return@withContext null
+        }
+        runCatching { opened.captureScreenshot(log) }
+            .onFailure { error ->
+                log.protocolLog("warm session capture failed: ${error.message ?: error::class.java.simpleName}")
+                dropSession(opened)
+            }
+            .getOrNull()
+    }
+
+    fun clear() {
+        synchronized(stateLock) {
+            config = null
+            scope = null
+            closeLocked()
+        }
+    }
+
+    fun close() = clear()
+
+    private fun startKeepAliveLocked(scope: CoroutineScope) {
+        keepAliveJob?.cancel()
+        keepAliveJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(TCL_SESSION_HEARTBEAT_INTERVAL_MS)
+                val opened = synchronized(stateLock) { session } ?: continue
+                val heartbeatLog = StringBuilder()
+                runCatching { opened.heartbeat(heartbeatLog) }
+                    .onFailure { dropSession(opened) }
+            }
+        }
+    }
+
+    private fun dropSession(opened: Tcl6553WarmSession) {
+        synchronized(stateLock) {
+            if (session === opened) {
+                session = null
+                opened.close()
+                val nextConfig = config
+                val nextScope = scope
+                if (nextConfig != null && nextScope != null) {
+                    startWarmLocked(nextScope, nextConfig)
+                }
+            }
+        }
+    }
+
+    private fun closeLocked() {
+        warmJob?.cancel()
+        warmJob = null
+        keepAliveJob?.cancel()
+        keepAliveJob = null
+        session?.close()
+        session = null
+    }
+}
+
+private class Tcl6553WarmSession(
+    private val socket: Socket,
+    private val input: DataInputStream,
+    private val output: DataOutputStream,
+    private val encrypted: Boolean
+) {
+    private val ioLock = Any()
+
+    fun captureScreenshot(log: StringBuilder): String = synchronized(ioLock) {
+        val shot = "225>>"
+        log.protocolLog("send warm screenshot $shot encrypted=$encrypted")
+        writeTclText(output, shot, encrypted = encrypted)
+        val response = readTclScreenshotResponse(input, encrypted, log)
+        val fields = response.split(">>")
+        require(fields.size >= 3 && fields[0] == "225" && fields[1] == "0") {
+            "Unexpected warm screenshot response: $response"
+        }
+        fields[2]
+    }
+
+    fun heartbeat(log: StringBuilder) = synchronized(ioLock) {
+        writeTclText(output, "150>>", encrypted = encrypted)
+        val heartbeatAck = readTclResponse(input, encrypted, log) { response ->
+            response.startsWith("150>>") || response.startsWith("225>>")
+        }
+        require(heartbeatAck == "150>>YES") { "Unexpected heartbeat response: $heartbeatAck" }
+    }
+
+    fun close() {
+        runCatching { socket.close() }
+    }
+}
+
+private fun openTcl6553Session(config: Tcl6553SessionConfig, log: StringBuilder): Tcl6553WarmSession {
+    val socket = Socket()
+    try {
+        socket.soTimeout = SOCKET_READ_TIMEOUT_MS
+        socket.tcpNoDelay = true
+        log.protocolLog("warm socket connect start")
+        socket.connect(InetSocketAddress(config.tvIp, config.port), SOCKET_CONNECT_TIMEOUT_MS)
+        log.protocolLog("warm socket connect complete")
+        val input = DataInputStream(socket.getInputStream())
+        val output = DataOutputStream(socket.getOutputStream())
+
+        val inquiry = "159>>${config.phoneName}>>1>>${config.uuid}>>1"
+        log.protocolLog("send warm $inquiry")
+        writeTclText(output, inquiry, encrypted = false)
+        val handshake = readTclPacket(input)
+        log.protocolLog("recv ${handshake.text}")
+        require(handshake.text.startsWith("159>>")) { "Unexpected handshake: ${handshake.text}" }
+        val fields = handshake.text.split(">>")
+        val encrypted = fields.getOrNull(6) == "1"
+        log.protocolLog("warm algorithm=${fields.getOrNull(6).orEmpty()} encrypted=$encrypted")
+
+        val prompt = "160>>${config.phoneImei}>>${config.phoneName}"
+        log.protocolLog("send warm $prompt encrypted=$encrypted")
+        writeTclText(output, prompt, encrypted = encrypted)
+
+        val session = Tcl6553WarmSession(socket, input, output, encrypted)
+        session.heartbeat(log)
+        return session
+    } catch (error: Throwable) {
+        runCatching { socket.close() }
+        throw error
+    }
+}
+
 private suspend fun captureTcl6553Screenshot(
     tvIp: String,
     port: Int,
     phoneName: String,
     uuid: String,
     phoneImei: String,
-    imageDirectory: File
+    imageDirectory: File,
+    sessionManager: Tcl6553SessionManager? = null
 ): Tcl6553ScreenshotResult = withContext(Dispatchers.IO) {
     val log = StringBuilder()
+    sessionManager?.captureScreenshotUrl(log)?.let { url ->
+        log.protocolLog("download warm url $url")
+        return@withContext saveTclScreenshotResult(url, downloadScreenshotWithRetries(url, log), imageDirectory, log)
+    }
     Socket().use { socket ->
         socket.soTimeout = SOCKET_READ_TIMEOUT_MS
         socket.tcpNoDelay = true
@@ -1435,21 +1644,7 @@ private suspend fun captureTcl6553Screenshot(
         }
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
-        val imageBytes = downloadScreenshotWithRetries(url, log)
-        val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-            ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
-
-        imageDirectory.mkdirs()
-        val file = File(imageDirectory, "TCast6553-${System.currentTimeMillis()}.${imageExtension(imageBytes)}")
-        file.writeBytes(imageBytes)
-
-        Tcl6553ScreenshotResult(
-            bitmap = bitmap,
-            byteCount = imageBytes.size,
-            file = file,
-            url = url,
-            log = log.toString().trim()
-        )
+        saveTclScreenshotResult(url, downloadScreenshotWithRetries(url, log), imageDirectory, log)
     }
 }
 
@@ -1540,6 +1735,48 @@ private fun decryptTclAes(bytes: ByteArray): ByteArray {
     return cipher.doFinal(bytes)
 }
 
+private fun saveTclScreenshotResult(
+    url: String,
+    imageBytes: ByteArray,
+    imageDirectory: File,
+    log: StringBuilder
+): Tcl6553ScreenshotResult {
+    val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
+
+    imageDirectory.mkdirs()
+    val file = File(imageDirectory, "TCast6553-${System.currentTimeMillis()}.${imageExtension(imageBytes)}")
+    file.writeBytes(imageBytes)
+
+    return Tcl6553ScreenshotResult(
+        bitmap = bitmap,
+        byteCount = imageBytes.size,
+        file = file,
+        url = url,
+        log = log.toString().trim()
+    )
+}
+
+private object ScreenshotPortCache {
+    private const val MAX_PORTS_PER_PATH = 8
+    private val portsByTarget = mutableMapOf<String, ArrayDeque<Int>>()
+
+    fun remember(host: String, path: String, port: Int) {
+        if (port !in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT) return
+        val key = "$host$path"
+        synchronized(portsByTarget) {
+            val ports = portsByTarget.getOrPut(key) { ArrayDeque() }
+            ports.remove(port)
+            ports.addFirst(port)
+            while (ports.size > MAX_PORTS_PER_PATH) ports.removeLast()
+        }
+    }
+
+    fun portsFor(host: String, path: String): List<Int> = synchronized(portsByTarget) {
+        portsByTarget["$host$path"]?.toList().orEmpty()
+    }
+}
+
 private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): ByteArray {
     var lastError: Throwable? = null
     repeat(HTTP_DOWNLOAD_ATTEMPTS) { index ->
@@ -1547,6 +1784,7 @@ private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): Byte
             log.protocolLog("download attempt ${index + 1}/$HTTP_DOWNLOAD_ATTEMPTS")
             val bytes = downloadScreenshotUrl(url)
             require(bytes.size in 1..MAX_SCREENSHOT_BYTES) { "Unexpected image byte count: ${bytes.size}" }
+            rememberScreenshotPort(url)
             return bytes
         } catch (error: Throwable) {
             lastError = error
@@ -1560,6 +1798,16 @@ private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): Byte
     throw IllegalStateException(
         "Downloaded screenshot URL never opened: ${lastError?.message ?: lastError?.javaClass?.simpleName}\n${log.toString().trim()}"
     )
+}
+
+private fun rememberScreenshotPort(url: String) {
+    runCatching {
+        val parsed = URL(url)
+        val port = parsed.port
+        val host = parsed.host.takeIf { it.isNotBlank() } ?: return
+        val path = parsed.file.takeIf { it.isNotBlank() } ?: "/"
+        ScreenshotPortCache.remember(host, path, port)
+    }
 }
 
 private fun downloadScreenshotUrl(url: String): ByteArray {
@@ -1584,7 +1832,8 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
         append(parsed.file.takeIf { it.isNotBlank() } ?: "/")
     }
     val portCount = HTTP_PORT_SCAN_LAST_PORT - HTTP_PORT_SCAN_FIRST_PORT + 1
-    var portOrder = randomizedPortOrder(portCount, stalePort)
+    val preferredPorts = ScreenshotPortCache.portsFor(host, path)
+    var portOrder = prioritizedPortOrder(portCount, stalePort, preferredPorts)
     val stopped = AtomicBoolean(false)
     val probeLogCount = AtomicInteger(0)
     val workers = minOf(HTTP_PORT_SCAN_PARALLELISM, portOrder.size)
@@ -1622,7 +1871,7 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
                 if (nextPortIndex >= portOrder.size) {
                     pass += 1
                     nextPortIndex = 0
-                    portOrder = randomizedPortOrder(portCount, stalePort)
+                    portOrder = prioritizedPortOrder(portCount, stalePort, preferredPorts)
                     log.protocolLog("port scan retry pass=$pass submitted=$submitted completed=$completed")
                 }
                 submitNext()
@@ -1639,6 +1888,7 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
             val result = runCatching { future.get() }.getOrNull()
             if (result != null) {
                 stopped.set(true)
+                ScreenshotPortCache.remember(host, path, result.first)
                 log.protocolLog(
                     "port scan found screenshot port=${result.first} bytes=${result.second.size} submitted=$submitted completed=$completed pass=$pass"
                 )
@@ -1652,6 +1902,19 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
     }
     log.protocolLog("port scan timeout submitted=$submitted completed=$completed next=$nextPortIndex pass=$pass")
     return null
+}
+
+private fun prioritizedPortOrder(portCount: Int, stalePort: Int, preferredPorts: List<Int>): IntArray {
+    val preferred = preferredPorts
+        .asSequence()
+        .filter { it in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT && it != stalePort }
+        .distinct()
+        .toList()
+    if (preferred.isEmpty()) return randomizedPortOrder(portCount, stalePort)
+
+    val preferredSet = preferred.toSet()
+    val randomizedTail = randomizedPortOrder(portCount, stalePort).filter { it !in preferredSet }
+    return (preferred + randomizedTail).toIntArray()
 }
 
 private fun randomizedPortOrder(portCount: Int, stalePort: Int): IntArray {
