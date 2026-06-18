@@ -78,6 +78,7 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("bottom_remote_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("fast_capture_status").assertTextContains("Connect TV for fast capture")
         assertAnyTextDisplayed("Please connect your TV......")
 
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
@@ -108,7 +109,7 @@ class MediaHomeUiTest {
         assertAnyTextExists("Selected: Test Living Room TV — 192.0.2.10")
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
-        assertAnyTextExists("TV connected")
+        assertAnyTextExists("TV connected — fallback capture only")
     }
 
     @Test

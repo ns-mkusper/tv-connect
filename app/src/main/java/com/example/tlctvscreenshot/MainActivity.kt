@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -94,6 +95,8 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -184,6 +187,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
     val tclSessionManager = remember { Tcl6553SessionManager() }
+    val fastCaptureState by tclSessionManager.state.collectAsState()
     DisposableEffect(Unit) {
         onDispose { tclSessionManager.close() }
     }
@@ -224,6 +228,9 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
     fun currentTvIp() = selectedDevice?.ip?.ifBlank { tvIp } ?: tvIp
+
+    val connectedToTv = selectedDevice != null || currentTvIp().isNotBlank()
+    val fastCaptureUiStatus = fastCaptureUiStatus(connectedToTv, fastCaptureState)
 
     fun rememberSelectedDevice(device: TclDiscoveryDevice) {
         val remembered = device.toSelectedDevice()
@@ -468,6 +475,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         ) {
             MediaHomeHeader(
                 selectedDevice = selectedDevice,
+                fastCaptureStatus = fastCaptureUiStatus,
                 onConnectClick = { showConnectDialog = true }
             )
 
@@ -477,7 +485,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             ) {
                 MediaActionTile(
                     title = "Capture TV",
-                    subtitle = if (isCapturingTcl) "Capturing" else "Screenshot",
+                    subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
                     enabled = !isCapturingTcl,
                     modifier = Modifier.weight(1f).testTag("action_capture_tv"),
                     onClick = { captureTv() }
@@ -508,8 +516,9 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             }
 
             StatusPanel(
-                connected = selectedDevice != null || currentTvIp().isNotBlank(),
+                connected = connectedToTv,
                 selectedDevice = selectedDevice,
+                fastCaptureStatus = fastCaptureUiStatus,
                 tclStatus = tclStatus,
                 galleryStatus = galleryStatus,
                 remoteStatus = remoteStatus,
@@ -555,7 +564,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         }
 
         BottomMediaBar(
-            connected = selectedDevice != null || currentTvIp().isNotBlank(),
+            fastCaptureStatus = fastCaptureUiStatus,
             onConnectClick = { showConnectDialog = true },
             onRemoteClick = { showRemoteDialog = true },
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -566,6 +575,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 @Composable
 private fun MediaHomeHeader(
     selectedDevice: SelectedTclDevice?,
+    fastCaptureStatus: FastCaptureUiStatus,
     onConnectClick: () -> Unit
 ) {
     Row(
@@ -587,6 +597,11 @@ private fun MediaHomeHeader(
                 selectedDevice?.let { "Connected to ${it.name.ifBlank { "TCL TV" }}" } ?: "Connect a TV to capture and control",
                 style = MaterialTheme.typography.bodySmall,
                 color = MutedText
+            )
+            Text(
+                fastCaptureStatus.title,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (fastCaptureStatus.ready) SuccessColor else MutedText
             )
         }
         Text("Gallery", style = MaterialTheme.typography.labelLarge, color = MutedText)
@@ -634,6 +649,7 @@ private fun MediaActionTile(
 private fun StatusPanel(
     connected: Boolean,
     selectedDevice: SelectedTclDevice?,
+    fastCaptureStatus: FastCaptureUiStatus,
     tclStatus: String,
     galleryStatus: String,
     remoteStatus: String,
@@ -650,6 +666,14 @@ private fun StatusPanel(
                 fontWeight = FontWeight.Bold,
                 color = if (connected) SuccessColor else AccentColor
             )
+            Text(
+                fastCaptureStatus.title,
+                modifier = Modifier.testTag("fast_capture_status"),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (fastCaptureStatus.ready) SuccessColor else AccentColor,
+                fontWeight = FontWeight.Bold
+            )
+            Text(fastCaptureStatus.detail, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(tclStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(galleryStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
@@ -812,7 +836,7 @@ private fun GalleryItem(
 
 @Composable
 private fun BottomMediaBar(
-    connected: Boolean,
+    fastCaptureStatus: FastCaptureUiStatus,
     onConnectClick: () -> Unit,
     onRemoteClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -823,10 +847,10 @@ private fun BottomMediaBar(
                 .fillMaxWidth()
                 .testTag("bottom_status_bar")
                 .height(34.dp)
-                .background(if (connected) SuccessColor else AccentColor),
+                .background(if (fastCaptureStatus.ready) SuccessColor else AccentColor),
             contentAlignment = Alignment.Center
         ) {
-            Text(if (connected) "TV connected" else "Please connect your TV......", color = Color.White, fontWeight = FontWeight.Bold)
+            Text(fastCaptureStatus.title, color = Color.White, fontWeight = FontWeight.Bold)
         }
         Row(
             modifier = Modifier
@@ -1035,6 +1059,54 @@ private data class Tcl6553SessionConfig(
     val uuid: String,
     val phoneImei: String
 )
+
+private enum class Tcl6553SessionState {
+    DISCONNECTED,
+    WARMING,
+    READY,
+    RECONNECTING,
+    FALLBACK_ONLY
+}
+
+private data class FastCaptureUiStatus(
+    val title: String,
+    val detail: String,
+    val captureSubtitle: String,
+    val ready: Boolean
+)
+
+private fun fastCaptureUiStatus(connected: Boolean, state: Tcl6553SessionState): FastCaptureUiStatus = when {
+    !connected -> FastCaptureUiStatus(
+        title = "Connect TV for fast capture",
+        detail = "Open discovery and connect to your TV before capturing.",
+        captureSubtitle = "Connect TV",
+        ready = false
+    )
+    state == Tcl6553SessionState.READY -> FastCaptureUiStatus(
+        title = "TV fully connected — fast capture ready",
+        detail = "The TV session is pre-connected, so Capture TV uses the fastest screenshot path.",
+        captureSubtitle = "Fast ready",
+        ready = true
+    )
+    state == Tcl6553SessionState.WARMING -> FastCaptureUiStatus(
+        title = "TV connected — preparing fast capture",
+        detail = "The app is opening the TV session. Captures can fall back until this is ready.",
+        captureSubtitle = "Preparing",
+        ready = false
+    )
+    state == Tcl6553SessionState.RECONNECTING -> FastCaptureUiStatus(
+        title = "TV connected — fast capture reconnecting",
+        detail = "The fast session dropped and is being restored. Capture may use fallback.",
+        captureSubtitle = "Reconnecting",
+        ready = false
+    )
+    else -> FastCaptureUiStatus(
+        title = "TV connected — fallback capture only",
+        detail = "Fast capture is not ready. Captures still work, but may be less frame-accurate.",
+        captureSubtitle = "Fallback",
+        ready = false
+    )
+}
 
 private fun testTclDevice(): TclDiscoveryDevice = TclDiscoveryDevice(
     ip = "192.0.2.10",
@@ -1419,6 +1491,9 @@ private fun verifyTcl6553Device(ip: String, phoneName: String, uuid: String): Tc
 
 private class Tcl6553SessionManager {
     private val stateLock = Any()
+    private val _state = MutableStateFlow(Tcl6553SessionState.DISCONNECTED)
+    val state: StateFlow<Tcl6553SessionState> = _state
+
     private var config: Tcl6553SessionConfig? = null
     private var scope: CoroutineScope? = null
     private var session: Tcl6553WarmSession? = null
@@ -1429,14 +1504,19 @@ private class Tcl6553SessionManager {
         synchronized(stateLock) {
             this.scope = scope
             if (this.config == config && (session != null || warmJob?.isActive == true)) return
-            closeLocked()
+            closeLocked(updateState = false)
             this.config = config
-            startWarmLocked(scope, config)
+            startWarmLocked(scope, config, Tcl6553SessionState.WARMING)
         }
     }
 
-    private fun startWarmLocked(scope: CoroutineScope, config: Tcl6553SessionConfig) {
+    private fun startWarmLocked(
+        scope: CoroutineScope,
+        config: Tcl6553SessionConfig,
+        startingState: Tcl6553SessionState
+    ) {
         warmJob?.cancel()
+        _state.value = startingState
         warmJob = scope.launch(Dispatchers.IO) {
             val log = StringBuilder()
             val opened = runCatching { openTcl6553Session(config, log) }
@@ -1447,8 +1527,11 @@ private class Tcl6553SessionManager {
                     opened?.close()
                 } else if (opened != null) {
                     session = opened
+                    _state.value = Tcl6553SessionState.READY
                     startKeepAliveLocked(scope)
                     Log.i(LOG_TAG, "${System.currentTimeMillis()} warm session ready")
+                } else if (session == null) {
+                    _state.value = Tcl6553SessionState.FALLBACK_ONLY
                 }
             }
         }
@@ -1472,7 +1555,7 @@ private class Tcl6553SessionManager {
         synchronized(stateLock) {
             config = null
             scope = null
-            closeLocked()
+            closeLocked(updateState = true)
         }
     }
 
@@ -1499,19 +1582,24 @@ private class Tcl6553SessionManager {
                 val nextConfig = config
                 val nextScope = scope
                 if (nextConfig != null && nextScope != null) {
-                    startWarmLocked(nextScope, nextConfig)
+                    startWarmLocked(nextScope, nextConfig, Tcl6553SessionState.RECONNECTING)
+                } else {
+                    _state.value = Tcl6553SessionState.FALLBACK_ONLY
                 }
             }
         }
     }
 
-    private fun closeLocked() {
+    private fun closeLocked(updateState: Boolean) {
         warmJob?.cancel()
         warmJob = null
         keepAliveJob?.cancel()
         keepAliveJob = null
         session?.close()
         session = null
+        if (updateState) {
+            _state.value = Tcl6553SessionState.DISCONNECTED
+        }
     }
 }
 

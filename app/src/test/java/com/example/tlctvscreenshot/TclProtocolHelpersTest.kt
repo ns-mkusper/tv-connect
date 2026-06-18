@@ -92,6 +92,41 @@ class TclProtocolHelpersTest {
     }
 
     @Test
+    fun fastCaptureUiStatusShowsReadyAndDisconnectedStates() {
+        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+            ?: error("Expected enum constants")
+        val ready = constants.single { (it as Enum<*>).name == "READY" }
+
+        val readyStatus = invoke("fastCaptureUiStatus", true, ready) ?: error("Expected ready status")
+        assertEquals("TV fully connected — fast capture ready", field(readyStatus, "title"))
+        assertEquals("Fast ready", field(readyStatus, "captureSubtitle"))
+        assertEquals(true, field(readyStatus, "ready"))
+
+        val disconnectedStatus = invoke("fastCaptureUiStatus", false, ready) ?: error("Expected disconnected status")
+        assertEquals("Connect TV for fast capture", field(disconnectedStatus, "title"))
+        assertEquals("Connect TV", field(disconnectedStatus, "captureSubtitle"))
+        assertEquals(false, field(disconnectedStatus, "ready"))
+    }
+
+    @Test
+    fun fastCaptureUiStatusShowsPreparingAndFallbackStates() {
+        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+            ?: error("Expected enum constants")
+        val warming = constants.single { (it as Enum<*>).name == "WARMING" }
+        val fallback = constants.single { (it as Enum<*>).name == "FALLBACK_ONLY" }
+
+        val warmingStatus = invoke("fastCaptureUiStatus", true, warming) ?: error("Expected warming status")
+        assertEquals("TV connected — preparing fast capture", field(warmingStatus, "title"))
+        assertEquals("Preparing", field(warmingStatus, "captureSubtitle"))
+        assertEquals(false, field(warmingStatus, "ready"))
+
+        val fallbackStatus = invoke("fastCaptureUiStatus", true, fallback) ?: error("Expected fallback status")
+        assertEquals("TV connected — fallback capture only", field(fallbackStatus, "title"))
+        assertEquals("Fallback", field(fallbackStatus, "captureSubtitle"))
+        assertEquals(false, field(fallbackStatus, "ready"))
+    }
+
+    @Test
     fun imageAndDisplayHelpersClassifySupportedFiles() {
         assertEquals("jpg", invoke("imageExtension", byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0x00)))
         assertEquals("png", invoke("imageExtension", byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00, 0x00)))
