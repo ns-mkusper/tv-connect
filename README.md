@@ -10,11 +10,13 @@ The runtime app does **not** require the companion app, TV ADB, phone ADB, or a 
 2. The app sends TCL UDP discovery packets on port `6537` (`0x1989`).
 3. It verifies candidates with the TV TCP control port `6553` using a plain `159>>{phoneName}>>1>>{uuid}>>1` handshake.
 4. If UDP discovery is missed or blocked, it falls back to a local `/24` TCP `6553` scan.
-5. Tap **Capture screenshot**.
-6. The app opens a persistent TCP `6553` connection, sends the prompt/heartbeat, sends two screenshot requests, and downloads the second returned HTTP URL.
-7. Scroll to **Remote control** to send D-pad, navigation, volume, channel, power, and number-pad commands to the selected TV.
+5. The selected TV card shows the remembered name, IP address, MAC address, discovery source, protocol algorithm, and last verification time.
+6. Tap **Capture screenshot**.
+7. The app opens a persistent TCP `6553` connection, sends the prompt/heartbeat, sends two screenshot requests, and downloads the second returned HTTP URL.
+8. Use **Screenshot gallery** to reopen saved captures, share them through Android Sharesheet, export them to Pictures, or delete them after confirmation.
+9. Scroll to **Remote control** to send D-pad, navigation, volume, channel, power, and number-pad commands to the selected TV.
 
-Screenshots are saved in the app-private directory under `files/TCast/Images` and shown in the UI.
+The last selected TV is remembered locally and can be cleared with **Forget TV** or refreshed with **Rediscover**. Screenshots are saved in app-private storage, listed after app restart, and shared through a content URI instead of exposing private file paths.
 
 ## Protocol details used by the standalone app
 
