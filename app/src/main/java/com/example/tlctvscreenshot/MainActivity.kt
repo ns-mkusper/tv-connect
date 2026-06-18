@@ -14,18 +14,26 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -40,12 +48,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -153,24 +164,28 @@ private fun ScreenshotWorkbench() {
     var tclPhoneName by remember { mutableStateOf(Build.MODEL ?: "Android") }
     var tclUuid by remember { mutableStateOf(androidId.ifBlank { "android-id-unavailable" }) }
     var tclPhoneImei by remember { mutableStateOf(tclStablePhoneId) }
-    var tclStatus by remember { mutableStateOf("Idle. Discover a TCL TV, then capture a screenshot directly from this app.") }
-    var tclBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var tclStatus by remember { mutableStateOf("Ready to capture from a connected TV.") }
+    var remoteStatus by remember { mutableStateOf("Remote ready. Connect a TV before sending commands.") }
     var isCapturingTcl by remember { mutableStateOf(false) }
-    var remoteStatus by remember { mutableStateOf("Idle. Select a TV, then send remote-control buttons directly from this app.") }
     var isSendingRemote by remember { mutableStateOf(false) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
-    var discoveryStatus by remember { mutableStateOf("Idle. Uses TCL UDP discovery on port $TCL_DISCOVERY_PORT, then verifies TCP $TCL_COMMAND_PORT.") }
+    var discoveryStatus by remember { mutableStateOf("Open discovery to find and connect to a TV.") }
     var isDiscovering by remember { mutableStateOf(false) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
     var selectedScreenshot by remember { mutableStateOf(screenshots.firstOrNull()) }
     var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { BitmapFactory.decodeFile(it.absolutePath) }) }
     var galleryStatus by remember {
         mutableStateOf(
-            if (screenshots.isEmpty()) "No saved screenshots yet." else "Loaded ${screenshots.size} saved screenshot(s)."
+            if (screenshots.isEmpty()) "No saved captures yet." else "Loaded ${screenshots.size} saved capture(s)."
         )
     }
     var isExporting by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
+    var showConnectDialog by remember { mutableStateOf(false) }
+    var showRemoteDialog by remember { mutableStateOf(false) }
+    var selectedGalleryTab by remember { mutableStateOf("All") }
+
+    fun currentTvIp() = selectedDevice?.ip?.ifBlank { tvIp } ?: tvIp
 
     fun rememberSelectedDevice(device: TclDiscoveryDevice) {
         val remembered = device.toSelectedDevice()
@@ -185,7 +200,7 @@ private fun ScreenshotWorkbench() {
         val nextSelected = preferredFile?.takeIf { it.exists() } ?: loaded.firstOrNull()
         selectedScreenshot = nextSelected
         galleryBitmap = nextSelected?.let { BitmapFactory.decodeFile(it.absolutePath) }
-        galleryStatus = if (loaded.isEmpty()) "No saved screenshots yet." else "Loaded ${loaded.size} saved screenshot(s)."
+        galleryStatus = if (loaded.isEmpty()) "No saved captures yet." else "Loaded ${loaded.size} saved capture(s)."
     }
 
     fun startDiscovery() {
@@ -204,7 +219,7 @@ private fun ScreenshotWorkbench() {
                 discoveredDevices = devices
                 devices.firstOrNull()?.let(::rememberSelectedDevice)
                 discoveryStatus = if (devices.isEmpty()) {
-                    "No TVs found. Confirm the phone and TV are on the same Wi-Fi subnet, or enter the TV IP manually below."
+                    "No TVs found. Confirm the phone and TV are on the same Wi-Fi subnet, or enter the TV IP manually."
                 } else {
                     "Found ${devices.size} TV candidate(s). The first one was selected and remembered."
                 }
@@ -215,11 +230,71 @@ private fun ScreenshotWorkbench() {
         }
     }
 
+    fun captureTv() {
+        val ip = currentTvIp().trim()
+        if (ip.isBlank()) {
+            tclStatus = "Please connect your TV first."
+            showConnectDialog = true
+            return
+        }
+        isCapturingTcl = true
+        tclStatus = "Connecting to $ip:$TCL_COMMAND_PORT..."
+        coroutineScope.launch {
+            runCatching {
+                captureTcl6553Screenshot(
+                    tvIp = ip,
+                    port = TCL_COMMAND_PORT,
+                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                    uuid = tclUuid.ifBlank { androidId },
+                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                    imageDirectory = screenshotDirectory
+                )
+            }.onSuccess { result ->
+                selectedScreenshot = result.file
+                galleryBitmap = result.bitmap
+                screenshots = loadScreenshotFiles(context)
+                tclStatus = "Captured ${formatFileSize(result.byteCount.toLong())} from TV."
+                galleryStatus = "Added ${result.file.name} to Gallery."
+            }.onFailure { error ->
+                tclStatus = "Screenshot failed: ${error.message ?: error::class.java.simpleName}"
+            }
+            isCapturingTcl = false
+        }
+    }
+
+    fun sendRemoteButton(label: String, keyCode: Int) {
+        val ip = currentTvIp().trim()
+        if (ip.isBlank()) {
+            remoteStatus = "Please connect your TV first."
+            showConnectDialog = true
+            return
+        }
+        isSendingRemote = true
+        remoteStatus = "Sending $label to $ip..."
+        coroutineScope.launch {
+            runCatching {
+                sendTcl6553RemoteKey(
+                    tvIp = ip,
+                    port = TCL_COMMAND_PORT,
+                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                    uuid = tclUuid.ifBlank { androidId },
+                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                    keyCode = keyCode
+                )
+            }.onSuccess {
+                remoteStatus = "Sent $label."
+            }.onFailure { error ->
+                remoteStatus = "Remote command failed: ${error.message ?: error::class.java.simpleName}"
+            }
+            isSendingRemote = false
+        }
+    }
+
     deleteCandidate?.let { file ->
         AlertDialog(
             onDismissRequest = { deleteCandidate = null },
-            title = { Text("Delete screenshot?") },
-            text = { Text("Delete ${file.name} from this app's saved screenshots?") },
+            title = { Text("Delete capture?") },
+            text = { Text("Delete ${file.name} from this app's saved gallery?") },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -236,45 +311,467 @@ private fun ScreenshotWorkbench() {
         )
     }
 
-    Column(
+    if (showConnectDialog) {
+        ConnectTvDialog(
+            selectedDevice = selectedDevice,
+            tvIp = tvIp,
+            onTvIpChange = { tvIp = it },
+            discoveryStatus = discoveryStatus,
+            isDiscovering = isDiscovering,
+            discoveredDevices = discoveredDevices,
+            tclPhoneName = tclPhoneName,
+            onTclPhoneNameChange = { tclPhoneName = it },
+            tclUuid = tclUuid,
+            onTclUuidChange = { tclUuid = it },
+            tclPhoneImei = tclPhoneImei,
+            onTclPhoneImeiChange = { tclPhoneImei = it },
+            onUseAndroidId = { tclUuid = androidId.ifBlank { "android-id-unavailable" } },
+            onDiscover = { startDiscovery() },
+            onUseDevice = { rememberSelectedDevice(it) },
+            onForget = {
+                forgetSelectedTclDevice(context)
+                selectedDevice = null
+                tvIp = ""
+                discoveredDevices = emptyList()
+                discoveryStatus = "Forgot remembered TV."
+            },
+            onDismiss = { showConnectDialog = false }
+        )
+    }
+
+    if (showRemoteDialog) {
+        RemoteControlDialog(
+            isSendingRemote = isSendingRemote,
+            remoteStatus = remoteStatus,
+            onSendRemoteButton = ::sendRemoteButton,
+            onDismiss = { showRemoteDialog = false }
+        )
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+            .background(AppBackground)
     ) {
-        Text(
-            text = "TCL TV Screenshot",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Standalone screenshot capture and remote control for compatible TCL/TLC TVs. No companion app, no ADB, and no fixed TV IP address are required.",
-            style = MaterialTheme.typography.bodyLarge
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            MediaHomeHeader(
+                selectedDevice = selectedDevice,
+                onConnectClick = { showConnectDialog = true }
+            )
 
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("1. Find the TV", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "Searches the local network using TCL UDP discovery and verifies candidates with the TV's TCP screenshot control port. If UDP announcements are missed, it falls back to a local subnet scan.",
-                    style = MaterialTheme.typography.bodyMedium
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MediaActionTile(
+                    title = "Capture TV",
+                    subtitle = if (isCapturingTcl) "Capturing" else "Screenshot",
+                    enabled = !isCapturingTcl,
+                    modifier = Modifier.weight(1f),
+                    onClick = { captureTv() }
                 )
+                MediaActionTile(
+                    title = "Cast Photo",
+                    subtitle = "Gallery",
+                    modifier = Modifier.weight(1f),
+                    onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MediaActionTile(
+                    title = "Cast Video",
+                    subtitle = "Media",
+                    modifier = Modifier.weight(1f),
+                    onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
+                )
+                MediaActionTile(
+                    title = "Cast Music",
+                    subtitle = "Audio",
+                    modifier = Modifier.weight(1f),
+                    onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
+                )
+            }
+
+            StatusPanel(
+                connected = selectedDevice != null || currentTvIp().isNotBlank(),
+                selectedDevice = selectedDevice,
+                tclStatus = tclStatus,
+                galleryStatus = galleryStatus,
+                remoteStatus = remoteStatus,
+                onConnectClick = { showConnectDialog = true }
+            )
+
+            GallerySection(
+                selectedTab = selectedGalleryTab,
+                onSelectedTabChange = { selectedGalleryTab = it },
+                screenshots = screenshots,
+                selectedScreenshot = selectedScreenshot,
+                galleryBitmap = galleryBitmap,
+                isExporting = isExporting,
+                onRefresh = { refreshGallery() },
+                onOpen = { file ->
+                    selectedScreenshot = file
+                    galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                    galleryStatus = "Opened ${file.name}."
+                },
+                onShare = { file -> shareScreenshot(context, file) },
+                onExport = { file ->
+                    isExporting = true
+                    galleryStatus = "Exporting ${file.name} to Pictures..."
+                    coroutineScope.launch {
+                        runCatching { exportScreenshotToPictures(context, file) }
+                            .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
+                            .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
+                        isExporting = false
+                    }
+                },
+                onDelete = { file -> deleteCandidate = file }
+            )
+        }
+
+        BottomMediaBar(
+            connected = selectedDevice != null || currentTvIp().isNotBlank(),
+            onConnectClick = { showConnectDialog = true },
+            onRemoteClick = { showRemoteDialog = true },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+}
+
+@Composable
+private fun MediaHomeHeader(
+    selectedDevice: SelectedTclDevice?,
+    onConnectClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Button(
+            onClick = onConnectClick,
+            colors = ButtonDefaults.buttonColors(containerColor = PanelColor),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Text("TV", fontWeight = FontWeight.Bold)
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Media Cast", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(
+                selectedDevice?.let { "Connected to ${it.name.ifBlank { "TCL TV" }}" } ?: "Connect a TV to capture and control",
+                style = MaterialTheme.typography.bodySmall,
+                color = MutedText
+            )
+        }
+        Text("Gallery", style = MaterialTheme.typography.labelLarge, color = MutedText)
+    }
+}
+
+@Composable
+private fun MediaActionTile(
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.height(112.dp),
+        colors = CardDefaults.cardColors(containerColor = PanelColor),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .background(AccentColor.copy(alpha = 0.18f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(title.take(1), color = AccentColor, fontWeight = FontWeight.Bold)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, fontWeight = FontWeight.Bold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPanel(
+    connected: Boolean,
+    selectedDevice: SelectedTclDevice?,
+    tclStatus: String,
+    galleryStatus: String,
+    remoteStatus: String,
+    onConnectClick: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = PanelColor),
+        shape = RoundedCornerShape(22.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                if (connected) selectedDevice?.let { "${it.name.ifBlank { "TCL TV" }} — ${it.ip}" } ?: "TV IP selected" else "Please connect your TV......",
+                fontWeight = FontWeight.Bold,
+                color = if (connected) SuccessColor else AccentColor
+            )
+            Text(tclStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            Text(galleryStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            if (!connected) {
+                TextButton(onClick = onConnectClick) { Text("Open discovery and connect") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GallerySection(
+    selectedTab: String,
+    onSelectedTabChange: (String) -> Unit,
+    screenshots: List<File>,
+    selectedScreenshot: File?,
+    galleryBitmap: Bitmap?,
+    isExporting: Boolean,
+    onRefresh: () -> Unit,
+    onOpen: (File) -> Unit,
+    onShare: (File) -> Unit,
+    onExport: (File) -> Unit,
+    onDelete: (File) -> Unit
+) {
+    val tabs = listOf("All", "Photos", "Videos", "Favorites")
+    Card(
+        colors = CardDefaults.cardColors(containerColor = PanelColor),
+        shape = RoundedCornerShape(24.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("Gallery", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = onRefresh) { Text("Refresh") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                tabs.forEach { tab ->
+                    GalleryTab(tab = tab, selected = tab == selectedTab, onClick = { onSelectedTabChange(tab) })
+                }
+            }
+            selectedScreenshot?.let { file ->
+                Text("Selected: ${file.name} (${formatFileSize(file.length())})", style = MaterialTheme.typography.bodySmall, color = MutedText)
+            }
+            galleryBitmap?.let { bitmap ->
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Selected saved TV capture preview",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(190.dp)
+                        .background(AppBackground, RoundedCornerShape(18.dp))
+                )
+            }
+            if (selectedScreenshot != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
-                        Text(if (isDiscovering) "Discovering..." else "Discover TV")
+                    Button(onClick = { onShare(selectedScreenshot) }) { Text("Share") }
+                    Button(enabled = !isExporting, onClick = { onExport(selectedScreenshot) }) {
+                        Text(if (isExporting) "Exporting" else "Export")
                     }
-                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
-                        Text("Rediscover")
+                    Button(onClick = { onDelete(selectedScreenshot) }) { Text("Delete") }
+                }
+            }
+            if (screenshots.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                        .background(AppBackground, RoundedCornerShape(20.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("Capture TV to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    screenshots.chunked(2).forEach { rowFiles ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                            rowFiles.forEach { file ->
+                                GalleryItem(
+                                    file = file,
+                                    selected = file == selectedScreenshot,
+                                    onOpen = onOpen,
+                                    onShare = onShare,
+                                    onDelete = onDelete,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            if (rowFiles.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryTab(tab: String, selected: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            containerColor = if (selected) AccentColor else AppBackground,
+            contentColor = if (selected) Color.White else MutedText
+        )
+    ) {
+        Text(tab)
+    }
+}
+
+@Composable
+private fun GalleryItem(
+    file: File,
+    selected: Boolean,
+    onOpen: (File) -> Unit,
+    onShare: (File) -> Unit,
+    onDelete: (File) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(105.dp)
+                    .clickable { onOpen(file) }
+                    .background(Color.Black, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Saved TV capture ${file.name}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("Preview unavailable", style = MaterialTheme.typography.bodySmall, color = MutedText, textAlign = TextAlign.Center)
+                }
+            }
+            Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(onClick = { onOpen(file) }) { Text("Open") }
+                TextButton(onClick = { onShare(file) }) { Text("Share") }
+            }
+            TextButton(onClick = { onDelete(file) }) { Text("Delete") }
+        }
+    }
+}
+
+@Composable
+private fun BottomMediaBar(
+    connected: Boolean,
+    onConnectClick: () -> Unit,
+    onRemoteClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(34.dp)
+                .background(if (connected) SuccessColor else AccentColor),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(if (connected) "TV connected" else "Please connect your TV......", color = Color.White, fontWeight = FontWeight.Bold)
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .background(PanelColor)
+                .padding(horizontal = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            TextButton(onClick = onConnectClick) { Text("Connect") }
+            Button(
+                onClick = onRemoteClick,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
+                shape = RoundedCornerShape(28.dp),
+                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
+            ) { Text("Remote", fontWeight = FontWeight.Bold) }
+            TextButton(onClick = onConnectClick) { Text("TV") }
+        }
+    }
+}
+
+@Composable
+private fun ConnectTvDialog(
+    selectedDevice: SelectedTclDevice?,
+    tvIp: String,
+    onTvIpChange: (String) -> Unit,
+    discoveryStatus: String,
+    isDiscovering: Boolean,
+    discoveredDevices: List<TclDiscoveryDevice>,
+    tclPhoneName: String,
+    onTclPhoneNameChange: (String) -> Unit,
+    tclUuid: String,
+    onTclUuidChange: (String) -> Unit,
+    tclPhoneImei: String,
+    onTclPhoneImeiChange: (String) -> Unit,
+    onUseAndroidId: () -> Unit,
+    onDiscover: () -> Unit,
+    onUseDevice: (TclDiscoveryDevice) -> Unit,
+    onForget: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = {
+            TextButton(enabled = selectedDevice != null, onClick = onForget) { Text("Forget TV") }
+        },
+        title = { Text("Connect TV") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                selectedDevice?.let { current ->
+                    Text("Selected: ${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
+                    Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}", style = MaterialTheme.typography.bodySmall)
+                } ?: Text("No TV selected.", color = AccentColor, fontWeight = FontWeight.Bold)
+                Button(enabled = !isDiscovering, onClick = onDiscover) {
+                    Text(if (isDiscovering) "Discovering..." else "Discover TV")
                 }
                 Text(discoveryStatus, style = MaterialTheme.typography.bodySmall)
                 discoveredDevices.forEach { device ->
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
                             Text(
-                                text = listOfNotNull(
+                                listOfNotNull(
                                     "source=${device.source}",
                                     device.mac?.let { "mac=$it" },
                                     device.algorithmType?.let { "algorithm=$it" }
@@ -284,304 +781,90 @@ private fun ScreenshotWorkbench() {
                             device.handshake?.let { handshake ->
                                 Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
-                            Button(onClick = { rememberSelectedDevice(device) }) {
-                                Text("Use ${device.ip}")
-                            }
+                            Button(onClick = { onUseDevice(device) }) { Text("Use ${device.ip}") }
                         }
                     }
                 }
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Selected TV", style = MaterialTheme.typography.titleLarge)
-                val current = selectedDevice
-                if (current == null) {
-                    Text("No remembered TV selected.", style = MaterialTheme.typography.bodyMedium)
-                } else {
-                    Text("${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
-                    Text("MAC: ${current.mac ?: "unknown"}")
-                    Text("Source: ${current.source ?: "unknown"}")
-                    Text("Algorithm: ${current.algorithmType ?: "unknown"}")
-                    Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}")
-                    current.handshake?.let { handshake ->
-                        Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(enabled = !isDiscovering, onClick = { startDiscovery() }) {
-                        Text("Rediscover")
-                    }
-                    Button(
-                        enabled = selectedDevice != null,
-                        onClick = {
-                            forgetSelectedTclDevice(context)
-                            selectedDevice = null
-                            tvIp = ""
-                            discoveredDevices = emptyList()
-                            discoveryStatus = "Forgot remembered TV."
-                        }
-                    ) {
-                        Text("Forget TV")
-                    }
-                }
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("2. Capture screenshot", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "Captures directly from the selected TV over the TCL TCP $TCL_COMMAND_PORT protocol: handshake, prompt, heartbeat, then the two-shot screenshot request needed by this TV.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
                 OutlinedTextField(
                     value = tvIp,
-                    onValueChange = { tvIp = it },
-                    label = { Text("Selected TV IP address") },
+                    onValueChange = onTvIpChange,
+                    label = { Text("Manual TV IP") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Button(
-                    enabled = !isCapturingTcl,
-                    onClick = {
-                        if (tvIp.isBlank()) {
-                            tclStatus = "Discover a TV first, or enter the TV IP address manually."
-                            return@Button
-                        }
-                        isCapturingTcl = true
-                        tclStatus = "Connecting to ${tvIp.trim()}:$TCL_COMMAND_PORT over TCL transport..."
-                        coroutineScope.launch {
-                            runCatching {
-                                captureTcl6553Screenshot(
-                                    tvIp = tvIp.trim(),
-                                    port = TCL_COMMAND_PORT,
-                                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
-                                    uuid = tclUuid.ifBlank { androidId },
-                                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                                    imageDirectory = screenshotDirectory
-                                )
-                            }.onSuccess { result ->
-                                tclBitmap = result.bitmap
-                                selectedScreenshot = result.file
-                                galleryBitmap = result.bitmap
-                                screenshots = loadScreenshotFiles(context)
-                                tclStatus = "Captured ${result.byteCount} bytes and added ${result.file.name} to the gallery."
-                                galleryStatus = "Selected latest capture: ${result.file.name}."
-                            }.onFailure { error ->
-                                tclStatus = "Screenshot failed: ${error.message ?: error::class.java.simpleName}"
-                            }
-                            isCapturingTcl = false
-                        }
-                    }
-                ) {
-                    Text(if (isCapturingTcl) "Capturing..." else "Capture screenshot")
-                }
-                Text(tclStatus, style = MaterialTheme.typography.bodySmall)
-                tclBitmap?.let { bitmap ->
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "TV screenshot preview",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp)
-                    )
-                }
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("3. Screenshot gallery", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "Browse captures saved by this app, share through Android Sharesheet, export to Pictures, or delete with confirmation.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { refreshGallery() }) { Text("Refresh") }
-                    Button(
-                        enabled = selectedScreenshot != null,
-                        onClick = { selectedScreenshot?.let { shareScreenshot(context, it) } }
-                    ) { Text("Share selected") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        enabled = selectedScreenshot != null && !isExporting,
-                        onClick = {
-                            val file = selectedScreenshot ?: return@Button
-                            isExporting = true
-                            galleryStatus = "Exporting ${file.name} to Pictures..."
-                            coroutineScope.launch {
-                                runCatching { exportScreenshotToPictures(context, file) }
-                                    .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
-                                    .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
-                                isExporting = false
-                            }
-                        }
-                    ) { Text(if (isExporting) "Exporting..." else "Export selected") }
-                    Button(
-                        enabled = selectedScreenshot != null,
-                        onClick = { selectedScreenshot?.let { deleteCandidate = it } }
-                    ) { Text("Delete selected") }
-                }
-                Text(galleryStatus, style = MaterialTheme.typography.bodySmall)
-                selectedScreenshot?.let { file ->
-                    Text("Selected: ${file.name} (${formatFileSize(file.length())}, ${formatTimestamp(file.lastModified())})")
-                }
-                galleryBitmap?.let { bitmap ->
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Selected saved screenshot preview",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(220.dp)
-                    )
-                }
-                screenshots.forEach { file ->
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(file.name, fontWeight = FontWeight.Bold)
-                            Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.bodySmall)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = {
-                                    selectedScreenshot = file
-                                    galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
-                                    galleryStatus = "Opened ${file.name}."
-                                }) { Text("Open") }
-                                Button(onClick = { shareScreenshot(context, file) }) { Text("Share") }
-                                Button(onClick = { deleteCandidate = file }) { Text("Delete") }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("4. Remote control", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "Sends button commands to the selected TV over the same TCP control transport.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                fun sendRemoteButton(label: String, keyCode: Int) {
-                    if (tvIp.isBlank()) {
-                        remoteStatus = "Discover a TV first, or enter the TV IP address manually."
-                        return
-                    }
-                    isSendingRemote = true
-                    remoteStatus = "Sending $label to ${tvIp.trim()}..."
-                    coroutineScope.launch {
-                        runCatching {
-                            sendTcl6553RemoteKey(
-                                tvIp = tvIp.trim(),
-                                port = TCL_COMMAND_PORT,
-                                phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
-                                uuid = tclUuid.ifBlank { androidId },
-                                phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                                keyCode = keyCode
-                            )
-                        }.onSuccess {
-                            remoteStatus = "Sent $label."
-                        }.onFailure { error ->
-                            remoteStatus = "Remote command failed: ${error.message ?: error::class.java.simpleName}"
-                        }
-                        isSendingRemote = false
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Power", TCL_KEY_POWER, isSendingRemote, ::sendRemoteButton)
-                    RemoteButton("Home", TCL_KEY_HOME, isSendingRemote, ::sendRemoteButton)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Back", TCL_KEY_BACK, isSendingRemote, ::sendRemoteButton)
-                    RemoteButton("Menu", TCL_KEY_MENU, isSendingRemote, ::sendRemoteButton)
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Up", TCL_KEY_UP, isSendingRemote, ::sendRemoteButton)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Left", TCL_KEY_LEFT, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("OK", TCL_KEY_OK, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("Right", TCL_KEY_RIGHT, isSendingRemote, ::sendRemoteButton)
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Down", TCL_KEY_DOWN, isSendingRemote, ::sendRemoteButton)
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Vol -", TCL_KEY_VOLUME_DOWN, isSendingRemote, ::sendRemoteButton)
-                    RemoteButton("Mute", TCL_KEY_MUTE, isSendingRemote, ::sendRemoteButton)
-                    RemoteButton("Vol +", TCL_KEY_VOLUME_UP, isSendingRemote, ::sendRemoteButton)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Ch -", TCL_KEY_CHANNEL_DOWN, isSendingRemote, ::sendRemoteButton)
-                    RemoteButton("Ch +", TCL_KEY_CHANNEL_UP, isSendingRemote, ::sendRemoteButton)
-                }
-                Text("Number pad", style = MaterialTheme.typography.titleMedium)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        RemoteButton("1", 1, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("2", 2, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("3", 3, isSendingRemote, ::sendRemoteButton)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        RemoteButton("4", 4, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("5", 5, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("6", 6, isSendingRemote, ::sendRemoteButton)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        RemoteButton("7", 7, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("8", 8, isSendingRemote, ::sendRemoteButton)
-                        RemoteButton("9", 9, isSendingRemote, ::sendRemoteButton)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        RemoteButton("0", 0, isSendingRemote, ::sendRemoteButton)
-                    }
-                }
-                Text(remoteStatus, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Advanced identity", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "These values are generated by this app and only used to identify the phone to the TV protocol. Leave them unchanged unless testing another identity.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Text("Advanced identity", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
                     value = tclPhoneName,
-                    onValueChange = { tclPhoneName = it },
+                    onValueChange = onTclPhoneNameChange,
                     label = { Text("Phone name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = tclUuid,
-                    onValueChange = { tclUuid = it },
+                    onValueChange = onTclUuidChange,
                     label = { Text("Handshake UUID") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = tclPhoneImei,
-                    onValueChange = { tclPhoneImei = it },
+                    onValueChange = onTclPhoneImeiChange,
                     label = { Text("Stable phone ID") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Button(onClick = { tclUuid = androidId.ifBlank { "android-id-unavailable" } }) {
-                    Text("Use this app's Android ID")
-                }
+                TextButton(onClick = onUseAndroidId) { Text("Use this app's Android ID") }
             }
         }
-    }
+    )
+}
+
+@Composable
+private fun RemoteControlDialog(
+    isSendingRemote: Boolean,
+    remoteStatus: String,
+    onSendRemoteButton: (String, Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("Remote") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RemoteButton("Power", TCL_KEY_POWER, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Home", TCL_KEY_HOME, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Back", TCL_KEY_BACK, isSendingRemote, onSendRemoteButton)
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        RemoteButton("Up", TCL_KEY_UP, isSendingRemote, onSendRemoteButton)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        RemoteButton("Left", TCL_KEY_LEFT, isSendingRemote, onSendRemoteButton)
+                        RemoteButton("OK", TCL_KEY_OK, isSendingRemote, onSendRemoteButton)
+                        RemoteButton("Right", TCL_KEY_RIGHT, isSendingRemote, onSendRemoteButton)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                        RemoteButton("Down", TCL_KEY_DOWN, isSendingRemote, onSendRemoteButton)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RemoteButton("Vol -", TCL_KEY_VOLUME_DOWN, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Mute", TCL_KEY_MUTE, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Vol +", TCL_KEY_VOLUME_UP, isSendingRemote, onSendRemoteButton)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RemoteButton("Menu", TCL_KEY_MENU, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Ch -", TCL_KEY_CHANNEL_DOWN, isSendingRemote, onSendRemoteButton)
+                    RemoteButton("Ch +", TCL_KEY_CHANNEL_UP, isSendingRemote, onSendRemoteButton)
+                }
+                Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            }
+        }
+    )
 }
 
 @Composable
@@ -594,11 +877,19 @@ private fun RemoteButton(
     Button(
         enabled = !disabled,
         onClick = { onClick(label, keyCode) },
-        modifier = Modifier.width(80.dp)
+        modifier = Modifier.width(82.dp),
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = PanelColor)
     ) {
-        Text(label)
+        Text(label, maxLines = 1)
     }
 }
+
+private val AppBackground = Color(0xFF0B0F18)
+private val PanelColor = Color(0xFF171D2A)
+private val MutedText = Color(0xFFA9B0C2)
+private val AccentColor = Color(0xFFE6426E)
+private val SuccessColor = Color(0xFF2DAF7D)
 
 private data class Tcl6553ScreenshotResult(
     val bitmap: Bitmap,
