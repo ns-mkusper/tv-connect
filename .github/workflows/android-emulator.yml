@@ -2,23 +2,25 @@ name: Android emulator UI tests
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'app/**'
-      - 'gradle/**'
-      - 'scripts/**'
-      - '*.gradle.kts'
-      - 'gradle.properties'
-      - '.github/workflows/android-emulator.yml'
-  push:
-    branches: [ main, master ]
-    paths:
-      - 'app/**'
-      - 'gradle/**'
-      - 'scripts/**'
-      - '*.gradle.kts'
-      - 'gradle.properties'
-      - '.github/workflows/android-emulator.yml'
+    inputs:
+      run_ui_tests:
+        description: 'Run connected Compose UI tests and upload emulator screenshot'
+        required: true
+        default: true
+        type: boolean
+      run_screenshot_comparison:
+        description: 'Run before/after emulator screenshot comparison for a PR'
+        required: true
+        default: false
+        type: boolean
+      pr_number:
+        description: 'PR number for before/after screenshot comparison'
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr_number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -29,6 +31,7 @@ jobs:
   emulator-ui-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    if: inputs.run_ui_tests
 
     steps:
       - name: Check out repository
@@ -99,18 +102,36 @@ jobs:
   android-emulator-screenshots:
     runs-on: ubuntu-latest
     timeout-minutes: 70
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    if: inputs.run_screenshot_comparison && inputs.pr_number != ''
     env:
       CI: "1"
       JAVA_OPTS: "-Dsun.net.client.defaultConnectTimeout=60000 -Dsun.net.client.defaultReadTimeout=60000"
       GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g -Dsun.net.client.defaultConnectTimeout=60000 -Dsun.net.client.defaultReadTimeout=60000"
 
     steps:
+      - name: Resolve PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+          if [[ "${head_repo}" != "${REPO}" ]]; then
+            echo "Screenshot comparison only supports PRs from ${REPO}." >&2
+            exit 1
+          fi
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.head.sha' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -r '.base.sha' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ steps.pr.outputs.head_sha }}
 
       - name: Enable KVM access
         run: |
@@ -134,7 +155,7 @@ jobs:
       - name: Create base worktree
         run: |
           set -euo pipefail
-          git worktree add ../tv-connect-base "${{ github.event.pull_request.base.sha }}"
+          git worktree add ../tv-connect-base "${{ steps.pr.outputs.base_sha }}"
           mkdir -p e2e-artifacts/apks
           cp app/build/outputs/apk/debug/app-debug.apk e2e-artifacts/apks/head-app-debug.apk
 
@@ -213,8 +234,8 @@ jobs:
         if: success() && hashFiles('e2e-artifacts/android-screenshots-after/*.png') != ''
         run: |
           set -euo pipefail
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          SOURCE_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+          SOURCE_SHA="${{ steps.pr.outputs.head_sha }}"
           SCREENSHOT_BRANCH="pr-${PR_NUMBER}-android-screenshots"
           DEST_DIR="android-emulator-screenshots/${SOURCE_SHA}"
           TMP_DIR="$(mktemp -d)"
@@ -242,11 +263,11 @@ jobs:
         if: steps.publish.outputs.branch != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           REPO: ${{ github.repository }}
           SCREENSHOT_BRANCH: ${{ steps.publish.outputs.branch }}
           SCREENSHOT_DIR: ${{ steps.publish.outputs.dir }}
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          SOURCE_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           set -euo pipefail
           MARKER="<!-- tv-connect-android-emulator-screenshots-pr-${PR_NUMBER} -->"

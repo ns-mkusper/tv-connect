@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
@@ -66,6 +67,7 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.InputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
@@ -79,6 +81,12 @@ import java.text.DateFormat
 import java.util.Collections
 import java.util.Date
 import java.util.UUID
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -101,9 +109,18 @@ private const val HTTP_CONNECT_TIMEOUT_MS = 1_000
 private const val HTTP_READ_TIMEOUT_MS = 10_000
 private const val HTTP_DOWNLOAD_ATTEMPTS = 30
 private const val HTTP_DOWNLOAD_RETRY_DELAY_MS = 250L
+private const val HTTP_DIRECT_ATTEMPTS_BEFORE_PORT_SCAN = 2
+private const val HTTP_PORT_SCAN_FIRST_PORT = 32768
+private const val HTTP_PORT_SCAN_LAST_PORT = 60999
+private const val HTTP_PORT_SCAN_CONNECT_TIMEOUT_MS = 75
+private const val HTTP_PORT_SCAN_READ_TIMEOUT_MS = 1_000
+private const val HTTP_PORT_SCAN_PARALLELISM = 384
+private const val HTTP_PORT_SCAN_START_DELAY_MS = 350L
+private const val HTTP_PORT_SCAN_TIMEOUT_MS = 12_000L
 private const val TCL_SCREENSHOT_SHOT_COUNT = 1
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
+private const val LOG_TAG = "TlcTvCapture"
 
 private const val TCL_REMOTE_KEY_COMMAND = 149
 private const val TCL_KEY_UP = 11
@@ -274,6 +291,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             return
         }
         isCapturingTcl = true
+        Log.i(LOG_TAG, "capture click accepted tv=$ip at=${System.currentTimeMillis()}")
         tclStatus = "Connecting to $ip:$TCL_COMMAND_PORT..."
         coroutineScope.launch {
             runCatching {
@@ -305,6 +323,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                         }
                 }
             }.onFailure { error ->
+                Log.e(LOG_TAG, "capture failed", error)
                 tclStatus = "Screenshot failed: ${error.message ?: error::class.java.simpleName}"
             }
             isCapturingTcl = false
@@ -1371,32 +1390,38 @@ private suspend fun captureTcl6553Screenshot(
     Socket().use { socket ->
         socket.soTimeout = SOCKET_READ_TIMEOUT_MS
         socket.tcpNoDelay = true
+        log.protocolLog("socket connect start tv=$tvIp:$port")
         socket.connect(InetSocketAddress(tvIp, port), SOCKET_CONNECT_TIMEOUT_MS)
+        log.protocolLog("socket connect complete tv=$tvIp:$port")
         val input = DataInputStream(socket.getInputStream())
         val output = DataOutputStream(socket.getOutputStream())
 
         val inquiry = "159>>$phoneName>>1>>$uuid>>1"
-        log.appendLine("send $inquiry")
+        log.protocolLog("send $inquiry")
         writeTclText(output, inquiry, encrypted = false)
         val handshake = readTclPacket(input)
-        log.appendLine("recv ${handshake.text}")
+        log.protocolLog("recv ${handshake.text}")
         val fields = handshake.text.split(">>")
         val encrypted = fields.getOrNull(6) == "1"
-        log.appendLine("algorithm=${fields.getOrNull(6).orEmpty()} encrypted=$encrypted")
+        log.protocolLog("algorithm=${fields.getOrNull(6).orEmpty()} encrypted=$encrypted")
 
         val prompt = "160>>$phoneImei>>$phoneName"
-        log.appendLine("send $prompt encrypted=$encrypted")
+        log.protocolLog("send $prompt encrypted=$encrypted")
         writeTclText(output, prompt, encrypted = encrypted)
 
         val heartbeat = "150>>"
-        log.appendLine("send $heartbeat encrypted=$encrypted")
+        log.protocolLog("send $heartbeat encrypted=$encrypted")
         writeTclText(output, heartbeat, encrypted = encrypted)
+        val heartbeatAck = readTclResponse(input, encrypted, log) { response ->
+            response.startsWith("150>>") || response.startsWith("225>>")
+        }
+        require(heartbeatAck == "150>>YES") { "Unexpected heartbeat response: $heartbeatAck" }
 
         val shot = "225>>"
         val shotUrls = mutableListOf<String>()
         repeat(TCL_SCREENSHOT_SHOT_COUNT) { index ->
             val shotNumber = index + 1
-            log.appendLine("send screenshot $shotNumber/$TCL_SCREENSHOT_SHOT_COUNT $shot encrypted=$encrypted")
+            log.protocolLog("send screenshot $shotNumber/$TCL_SCREENSHOT_SHOT_COUNT $shot encrypted=$encrypted")
             writeTclText(output, shot, encrypted = encrypted)
 
             val response = readTclScreenshotResponse(input, encrypted, log)
@@ -1406,7 +1431,7 @@ private suspend fun captureTcl6553Screenshot(
             }
             val shotUrl = shotFields[2]
             shotUrls += shotUrl
-            log.appendLine("download url $shotUrl")
+            log.protocolLog("download url $shotUrl")
         }
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
@@ -1476,17 +1501,31 @@ private fun readTclScreenshotResponse(
     input: DataInputStream,
     encrypted: Boolean,
     log: StringBuilder
+): String = readTclResponse(input, encrypted, log) { response ->
+    response.startsWith("225>>")
+}
+
+private fun readTclResponse(
+    input: DataInputStream,
+    encrypted: Boolean,
+    log: StringBuilder,
+    predicate: (String) -> Boolean
 ): String {
     val deadline = System.currentTimeMillis() + SOCKET_READ_TIMEOUT_MS
     while (System.currentTimeMillis() < deadline) {
         val packet = readTclPacket(input)
         val text = if (encrypted) decryptTclAes(packet.raw).toString(Charsets.UTF_8) else packet.text
-        log.appendLine("recv $text")
-        if (text.startsWith("225>>")) {
+        log.protocolLog("recv $text")
+        if (predicate(text)) {
             return text
         }
     }
-    error("Timed out waiting for 225 screenshot response. $log")
+    error("Timed out waiting for TCL response. ${log.toString().trim()}")
+}
+
+private fun StringBuilder.protocolLog(message: String) {
+    appendLine(message)
+    Log.i(LOG_TAG, "${System.currentTimeMillis()} $message")
 }
 
 private fun encryptTclAes(bytes: ByteArray): ByteArray {
@@ -1505,21 +1544,16 @@ private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): Byte
     var lastError: Throwable? = null
     repeat(HTTP_DOWNLOAD_ATTEMPTS) { index ->
         try {
-            log.appendLine("download attempt ${index + 1}/$HTTP_DOWNLOAD_ATTEMPTS")
-            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = HTTP_CONNECT_TIMEOUT_MS
-                readTimeout = HTTP_READ_TIMEOUT_MS
-                requestMethod = "GET"
-                useCaches = false
-            }
-            connection.inputStream.use { stream ->
-                val bytes = stream.readBytes()
-                require(bytes.size in 1..MAX_SCREENSHOT_BYTES) { "Unexpected image byte count: ${bytes.size}" }
-                return bytes
-            }
+            log.protocolLog("download attempt ${index + 1}/$HTTP_DOWNLOAD_ATTEMPTS")
+            val bytes = downloadScreenshotUrl(url)
+            require(bytes.size in 1..MAX_SCREENSHOT_BYTES) { "Unexpected image byte count: ${bytes.size}" }
+            return bytes
         } catch (error: Throwable) {
             lastError = error
-            log.appendLine("download failed: ${error.message ?: error::class.java.simpleName}")
+            log.protocolLog("download failed: ${error.message ?: error::class.java.simpleName}")
+            if (index + 1 == HTTP_DIRECT_ATTEMPTS_BEFORE_PORT_SCAN) {
+                findScreenshotOnFreshHttpPort(url, log)?.let { return it }
+            }
             Thread.sleep(HTTP_DOWNLOAD_RETRY_DELAY_MS)
         }
     }
@@ -1527,6 +1561,236 @@ private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): Byte
         "Downloaded screenshot URL never opened: ${lastError?.message ?: lastError?.javaClass?.simpleName}\n${log.toString().trim()}"
     )
 }
+
+private fun downloadScreenshotUrl(url: String): ByteArray {
+    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        connectTimeout = HTTP_CONNECT_TIMEOUT_MS
+        readTimeout = HTTP_READ_TIMEOUT_MS
+        requestMethod = "GET"
+        useCaches = false
+    }
+    return try {
+        connection.inputStream.use { stream -> stream.readBytesBounded(MAX_SCREENSHOT_BYTES) }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): ByteArray? {
+    val parsed = URL(url)
+    val stalePort = parsed.port
+    val host = parsed.host.takeIf { it.isNotBlank() } ?: return null
+    val path = buildString {
+        append(parsed.file.takeIf { it.isNotBlank() } ?: "/")
+    }
+    val portCount = HTTP_PORT_SCAN_LAST_PORT - HTTP_PORT_SCAN_FIRST_PORT + 1
+    var portOrder = randomizedPortOrder(portCount, stalePort)
+    val stopped = AtomicBoolean(false)
+    val probeLogCount = AtomicInteger(0)
+    val workers = minOf(HTTP_PORT_SCAN_PARALLELISM, portOrder.size)
+    val executor = Executors.newFixedThreadPool(workers)
+    val completion = ExecutorCompletionService<Pair<Int, ByteArray>?>(executor)
+    var nextPortIndex = 0
+    var submitted = 0
+    var completed = 0
+    var pass = 1
+    var startedAt = 0L
+
+    fun submitNext() {
+        while (!stopped.get() && submitted - completed < workers && nextPortIndex < portOrder.size) {
+            val port = portOrder[nextPortIndex]
+            nextPortIndex += 1
+            if (port == stalePort) continue
+            completion.submit(Callable {
+                if (stopped.get()) null else probeScreenshotPort(host, port, path, probeLogCount)
+            })
+            submitted += 1
+        }
+    }
+
+    log.protocolLog(
+        "port scan wait ${HTTP_PORT_SCAN_START_DELAY_MS}ms before fallback sweep host=$host stale=$stalePort"
+    )
+    Thread.sleep(HTTP_PORT_SCAN_START_DELAY_MS)
+    startedAt = System.currentTimeMillis()
+    log.protocolLog(
+        "port scan start host=$host path=$path ports=${HTTP_PORT_SCAN_FIRST_PORT}..$HTTP_PORT_SCAN_LAST_PORT stale=$stalePort workers=$workers"
+    )
+    try {
+        while (System.currentTimeMillis() - startedAt < HTTP_PORT_SCAN_TIMEOUT_MS) {
+            if (completed == submitted) {
+                if (nextPortIndex >= portOrder.size) {
+                    pass += 1
+                    nextPortIndex = 0
+                    portOrder = randomizedPortOrder(portCount, stalePort)
+                    log.protocolLog("port scan retry pass=$pass submitted=$submitted completed=$completed")
+                }
+                submitNext()
+            }
+
+            val remaining = HTTP_PORT_SCAN_TIMEOUT_MS - (System.currentTimeMillis() - startedAt)
+            if (remaining <= 0L) break
+            val future = completion.poll(remaining.coerceAtMost(250L), TimeUnit.MILLISECONDS)
+            if (future == null) {
+                submitNext()
+                continue
+            }
+            completed += 1
+            val result = runCatching { future.get() }.getOrNull()
+            if (result != null) {
+                stopped.set(true)
+                log.protocolLog(
+                    "port scan found screenshot port=${result.first} bytes=${result.second.size} submitted=$submitted completed=$completed pass=$pass"
+                )
+                return result.second
+            }
+            submitNext()
+        }
+    } finally {
+        stopped.set(true)
+        executor.shutdownNow()
+    }
+    log.protocolLog("port scan timeout submitted=$submitted completed=$completed next=$nextPortIndex pass=$pass")
+    return null
+}
+
+private fun randomizedPortOrder(portCount: Int, stalePort: Int): IntArray {
+    val ports = IntArray(portCount)
+    val staleOffset = (stalePort - HTTP_PORT_SCAN_FIRST_PORT).coerceIn(0, portCount - 1)
+    val seed = (System.nanoTime() xor stalePort.toLong()).toPositiveInt()
+    val start = (staleOffset + seed).floorMod(portCount)
+    var step = (seed or 1).floorMod(portCount).coerceAtLeast(1)
+    while (greatestCommonDivisor(step, portCount) != 1) {
+        step += 2
+        if (step >= portCount) step = 1
+    }
+    for (index in 0 until portCount) {
+        ports[index] = HTTP_PORT_SCAN_FIRST_PORT + ((start + index * step).floorMod(portCount))
+    }
+    return ports
+}
+
+private fun Long.toPositiveInt(): Int = (this and Int.MAX_VALUE.toLong()).toInt()
+
+private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus
+
+private tailrec fun greatestCommonDivisor(left: Int, right: Int): Int =
+    if (right == 0) left else greatestCommonDivisor(right, left % right)
+
+private fun probeScreenshotPort(
+    host: String,
+    port: Int,
+    path: String,
+    probeLogCount: AtomicInteger
+): Pair<Int, ByteArray>? = runCatching {
+    Socket().use { socket ->
+        socket.tcpNoDelay = true
+        socket.soTimeout = HTTP_PORT_SCAN_READ_TIMEOUT_MS
+        socket.connect(InetSocketAddress(host, port), HTTP_PORT_SCAN_CONNECT_TIMEOUT_MS)
+        val request = "GET $path HTTP/1.1\r\nHost: $host:$port\r\nConnection: close\r\n\r\n"
+        socket.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
+        socket.getOutputStream().flush()
+
+        val input = socket.getInputStream()
+        val header = input.readHttpHeadersBounded() ?: return@runCatching null
+        val statusCode = header.lineSequence()
+            .firstOrNull()
+            ?.split(' ')
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+        val contentLength = header.lineSequence()
+            .firstNotNullOfOrNull { line ->
+                val separator = line.indexOf(':')
+                if (separator < 0 || !line.substring(0, separator).equals("Content-Length", ignoreCase = true)) {
+                    null
+                } else {
+                    line.substring(separator + 1).trim().toIntOrNull()
+                }
+            }
+        if (probeLogCount.getAndIncrement() < 24) {
+            Log.i(LOG_TAG, "${System.currentTimeMillis()} port probe connected port=$port code=$statusCode length=${contentLength ?: -1}")
+        }
+        if (statusCode != 200) return@runCatching null
+        val body = if (contentLength != null) {
+            input.readExactlyBytesBounded(contentLength, MAX_SCREENSHOT_BYTES)
+        } else {
+            input.readBytesBoundedUntilTimeout(MAX_SCREENSHOT_BYTES)
+        }
+        if (body.size !in 1..MAX_SCREENSHOT_BYTES || !looksLikeScreenshot(body)) return@runCatching null
+        if (BitmapFactory.decodeByteArray(body, 0, body.size) == null) return@runCatching null
+        port to body
+    }
+}.getOrNull()
+
+private fun InputStream.readHttpHeadersBounded(): String? {
+    val output = ByteArrayOutputStream()
+    var matched = 0
+    while (output.size() < 8 * 1024) {
+        val value = read()
+        if (value == -1) return null
+        output.write(value)
+        matched = when {
+            matched == 0 && value == '\r'.code -> 1
+            matched == 1 && value == '\n'.code -> 2
+            matched == 2 && value == '\r'.code -> 3
+            matched == 3 && value == '\n'.code -> return output.toByteArray().decodeToString()
+            value == '\r'.code -> 1
+            else -> 0
+        }
+    }
+    return null
+}
+
+private fun InputStream.readExactlyBytesBounded(size: Int, maxBytes: Int): ByteArray {
+    require(size in 0..maxBytes) { "Response exceeded $maxBytes bytes" }
+    val bytes = ByteArray(size)
+    var offset = 0
+    while (offset < size) {
+        val read = read(bytes, offset, size - offset)
+        if (read == -1) error("Response ended after $offset of $size bytes")
+        offset += read
+    }
+    return bytes
+}
+
+private fun InputStream.readBytesBoundedUntilTimeout(maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0
+    while (true) {
+        val read = try {
+            read(buffer)
+        } catch (_: SocketTimeoutException) {
+            break
+        }
+        if (read == -1) break
+        total += read
+        require(total <= maxBytes) { "Response exceeded $maxBytes bytes" }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+private fun InputStream.readBytesBounded(maxBytes: Int): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read == -1) break
+        total += read
+        require(total <= maxBytes) { "Response exceeded $maxBytes bytes" }
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
+private fun looksLikeScreenshot(bytes: ByteArray): Boolean =
+    bytes.size >= 3 && bytes[0] == 0xff.toByte() && bytes[1] == 0xd8.toByte() && bytes[2] == 0xff.toByte() ||
+        bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() &&
+        bytes[2] == 0x4e.toByte() && bytes[3] == 0x47.toByte() &&
+        bytes[4] == 0x0d.toByte() && bytes[5] == 0x0a.toByte() &&
+        bytes[6] == 0x1a.toByte() && bytes[7] == 0x0a.toByte()
 
 private fun imageExtension(bytes: ByteArray): String = when {
     bytes.size >= 3 && bytes[0] == 0xff.toByte() && bytes[1] == 0xd8.toByte() && bytes[2] == 0xff.toByte() -> "jpg"
