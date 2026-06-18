@@ -1,0 +1,63 @@
+name: Android emulator screenshots
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-emulator.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-emulator.yml'
+
+jobs:
+  emulator-screenshot:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Launch emulator and capture screenshot
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            set -euxo pipefail
+            adb devices -l
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell am start -n com.example.tlctvscreenshot/.MainActivity
+            sleep 5
+            mkdir -p captures
+            adb exec-out screencap -p > captures/compose-workbench-emulator.png
+            adb shell pm list packages | grep -i magi || true
+
+      - name: Upload screenshot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-screenshots
+          path: captures/*.png
+          if-no-files-found: error
