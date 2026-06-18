@@ -1,4 +1,4 @@
-name: Android emulator screenshots
+name: Android emulator UI tests
 
 on:
   workflow_dispatch:
@@ -19,13 +19,19 @@ on:
       - '.github/workflows/android-emulator.yml'
 
 jobs:
-  emulator-screenshot:
+  emulator-ui-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -34,13 +40,12 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Build debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+      - name: Build, lint, and run JVM tests
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
 
-      - name: Launch emulator and capture screenshot
-        id: emulator_screenshot
-        continue-on-error: true
-        timeout-minutes: 12
+      - name: Run Compose UI tests and capture screenshot
+        id: emulator_ui_tests
+        timeout-minutes: 18
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 29
@@ -51,14 +56,15 @@ jobs:
           emulator-boot-timeout: 480
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            set -euxo pipefail
+            set -eux
+            mkdir -p captures
+            adb wait-for-device
             adb devices -l
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
             adb install -r app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -n com.example.tlctvscreenshot/.MainActivity
             sleep 5
-            mkdir -p captures
             adb exec-out screencap -p > captures/compose-workbench-emulator.png
-            adb shell pm list packages | grep -i magi || true
 
       - name: Ensure screenshot artifact exists
         if: always()
@@ -72,7 +78,16 @@ jobs:
 
       - name: Upload screenshot artifacts
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: emulator-screenshots
           path: captures/*.png
           if-no-files-found: error
+
+      - name: Upload instrumentation test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: connected-ui-test-results
+          path: app/build/outputs/androidTest-results/connected/**
+          if-no-files-found: ignore

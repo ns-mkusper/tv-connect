@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -54,12 +55,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -130,22 +133,29 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            TlcTvScreenshotApp()
+            TlcTvScreenshotApp(
+                testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
+            )
         }
     }
+
+    private fun isAppDebuggable(): Boolean =
+        (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 }
 
+private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE"
+
 @Composable
-private fun TlcTvScreenshotApp() {
+private fun TlcTvScreenshotApp(testMode: Boolean = false) {
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            ScreenshotWorkbench()
+            ScreenshotWorkbench(testMode = testMode)
         }
     }
 }
 
 @Composable
-private fun ScreenshotWorkbench() {
+private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
@@ -207,6 +217,14 @@ private fun ScreenshotWorkbench() {
         isDiscovering = true
         discoveredDevices = emptyList()
         discoveryStatus = "Discovering TVs on the local network..."
+        if (testMode) {
+            val testDevice = testTclDevice()
+            discoveredDevices = listOf(testDevice)
+            rememberSelectedDevice(testDevice)
+            discoveryStatus = "Found 1 test TV candidate. The test TV was selected and remembered."
+            isDiscovering = false
+            return
+        }
         coroutineScope.launch {
             runCatching {
                 discoverTclTvs(
@@ -231,6 +249,25 @@ private fun ScreenshotWorkbench() {
     }
 
     fun captureTv() {
+        if (testMode) {
+            isCapturingTcl = true
+            tclStatus = "Creating test TV screenshot..."
+            coroutineScope.launch {
+                runCatching { createTestTclScreenshot(screenshotDirectory) }
+                    .onSuccess { result ->
+                        selectedScreenshot = result.file
+                        galleryBitmap = result.bitmap
+                        screenshots = loadScreenshotFiles(context)
+                        tclStatus = "Captured test TV screenshot."
+                        galleryStatus = "Added ${result.file.name} to Gallery."
+                    }
+                    .onFailure { error ->
+                        tclStatus = "Test capture failed: ${error.message ?: error::class.java.simpleName}"
+                    }
+                isCapturingTcl = false
+            }
+            return
+        }
         val ip = currentTvIp().trim()
         if (ip.isBlank()) {
             tclStatus = "Please connect your TV first."
@@ -263,6 +300,10 @@ private fun ScreenshotWorkbench() {
     }
 
     fun sendRemoteButton(label: String, keyCode: Int) {
+        if (testMode) {
+            remoteStatus = "Test remote sent $label."
+            return
+        }
         val ip = currentTvIp().trim()
         if (ip.isBlank()) {
             remoteStatus = "Please connect your TV first."
@@ -293,10 +334,12 @@ private fun ScreenshotWorkbench() {
     deleteCandidate?.let { file ->
         AlertDialog(
             onDismissRequest = { deleteCandidate = null },
+            modifier = Modifier.testTag("delete_capture_dialog"),
             title = { Text("Delete capture?") },
             text = { Text("Delete ${file.name} from this app's saved gallery?") },
             confirmButton = {
                 TextButton(
+                    modifier = Modifier.testTag("confirm_delete_button"),
                     onClick = {
                         val deleted = runCatching { file.delete() }.getOrDefault(false)
                         deleteCandidate = null
@@ -306,7 +349,7 @@ private fun ScreenshotWorkbench() {
                 ) { Text("Delete") }
             },
             dismissButton = {
-                TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") }
+                TextButton(modifier = Modifier.testTag("cancel_delete_button"), onClick = { deleteCandidate = null }) { Text("Cancel") }
             }
         )
     }
@@ -356,6 +399,7 @@ private fun ScreenshotWorkbench() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .testTag("home_root")
                 .verticalScroll(rememberScrollState())
                 .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
@@ -373,13 +417,13 @@ private fun ScreenshotWorkbench() {
                     title = "Capture TV",
                     subtitle = if (isCapturingTcl) "Capturing" else "Screenshot",
                     enabled = !isCapturingTcl,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("action_capture_tv"),
                     onClick = { captureTv() }
                 )
                 MediaActionTile(
                     title = "Cast Photo",
                     subtitle = "Gallery",
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("action_cast_photo"),
                     onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
                 )
             }
@@ -390,13 +434,13 @@ private fun ScreenshotWorkbench() {
                 MediaActionTile(
                     title = "Cast Video",
                     subtitle = "Media",
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("action_cast_video"),
                     onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
                 )
                 MediaActionTile(
                     title = "Cast Music",
                     subtitle = "Audio",
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("action_cast_music"),
                     onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
                 )
             }
@@ -423,15 +467,25 @@ private fun ScreenshotWorkbench() {
                     galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
                     galleryStatus = "Opened ${file.name}."
                 },
-                onShare = { file -> shareScreenshot(context, file) },
+                onShare = { file ->
+                    if (testMode) {
+                        galleryStatus = "Test shared ${file.name}."
+                    } else {
+                        shareScreenshot(context, file)
+                    }
+                },
                 onExport = { file ->
-                    isExporting = true
-                    galleryStatus = "Exporting ${file.name} to Pictures..."
-                    coroutineScope.launch {
-                        runCatching { exportScreenshotToPictures(context, file) }
-                            .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
-                            .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
-                        isExporting = false
+                    if (testMode) {
+                        galleryStatus = "Test exported ${file.name}."
+                    } else {
+                        isExporting = true
+                        galleryStatus = "Exporting ${file.name} to Pictures..."
+                        coroutineScope.launch {
+                            runCatching { exportScreenshotToPictures(context, file) }
+                                .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
+                                .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
+                            isExporting = false
+                        }
                     }
                 },
                 onDelete = { file -> deleteCandidate = file }
@@ -458,6 +512,7 @@ private fun MediaHomeHeader(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Button(
+            modifier = Modifier.testTag("top_tv_button"),
             onClick = onConnectClick,
             colors = ButtonDefaults.buttonColors(containerColor = PanelColor),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
@@ -523,6 +578,7 @@ private fun StatusPanel(
     onConnectClick: () -> Unit
 ) {
     Card(
+        modifier = Modifier.testTag("status_panel"),
         colors = CardDefaults.cardColors(containerColor = PanelColor),
         shape = RoundedCornerShape(22.dp)
     ) {
@@ -536,7 +592,7 @@ private fun StatusPanel(
             Text(galleryStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             if (!connected) {
-                TextButton(onClick = onConnectClick) { Text("Open discovery and connect") }
+                TextButton(modifier = Modifier.testTag("status_connect_button"), onClick = onConnectClick) { Text("Open discovery and connect") }
             }
         }
     }
@@ -558,13 +614,14 @@ private fun GallerySection(
 ) {
     val tabs = listOf("All", "Photos", "Videos", "Favorites")
     Card(
+        modifier = Modifier.testTag("gallery_section"),
         colors = CardDefaults.cardColors(containerColor = PanelColor),
         shape = RoundedCornerShape(24.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Gallery", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = onRefresh) { Text("Refresh") }
+                TextButton(modifier = Modifier.testTag("gallery_refresh_button"), onClick = onRefresh) { Text("Refresh") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 tabs.forEach { tab ->
@@ -581,17 +638,18 @@ private fun GallerySection(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .testTag("selected_capture_preview")
                         .height(190.dp)
                         .background(AppBackground, RoundedCornerShape(18.dp))
                 )
             }
             if (selectedScreenshot != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onShare(selectedScreenshot) }) { Text("Share") }
-                    Button(enabled = !isExporting, onClick = { onExport(selectedScreenshot) }) {
+                    Button(modifier = Modifier.testTag("selected_share_button"), onClick = { onShare(selectedScreenshot) }) { Text("Share") }
+                    Button(modifier = Modifier.testTag("selected_export_button"), enabled = !isExporting, onClick = { onExport(selectedScreenshot) }) {
                         Text(if (isExporting) "Exporting" else "Export")
                     }
-                    Button(onClick = { onDelete(selectedScreenshot) }) { Text("Delete") }
+                    Button(modifier = Modifier.testTag("selected_delete_button"), onClick = { onDelete(selectedScreenshot) }) { Text("Delete") }
                 }
             }
             if (screenshots.isEmpty()) {
@@ -632,6 +690,7 @@ private fun GallerySection(
 @Composable
 private fun GalleryTab(tab: String, selected: Boolean, onClick: () -> Unit) {
     TextButton(
+        modifier = Modifier.testTag("gallery_tab_$tab"),
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(
             containerColor = if (selected) AccentColor else AppBackground,
@@ -653,7 +712,7 @@ private fun GalleryItem(
 ) {
     val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
     Card(
-        modifier = modifier,
+        modifier = modifier.testTag("gallery_item"),
         colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
         shape = RoundedCornerShape(18.dp)
     ) {
@@ -661,6 +720,7 @@ private fun GalleryItem(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .testTag("gallery_item_preview")
                     .height(105.dp)
                     .clickable { onOpen(file) }
                     .background(Color.Black, RoundedCornerShape(14.dp)),
@@ -680,10 +740,10 @@ private fun GalleryItem(
             Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
             Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(onClick = { onOpen(file) }) { Text("Open") }
-                TextButton(onClick = { onShare(file) }) { Text("Share") }
+                TextButton(modifier = Modifier.testTag("gallery_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
+                TextButton(modifier = Modifier.testTag("gallery_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
             }
-            TextButton(onClick = { onDelete(file) }) { Text("Delete") }
+            TextButton(modifier = Modifier.testTag("gallery_item_delete_button"), onClick = { onDelete(file) }) { Text("Delete") }
         }
     }
 }
@@ -699,6 +759,7 @@ private fun BottomMediaBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .testTag("bottom_status_bar")
                 .height(34.dp)
                 .background(if (connected) SuccessColor else AccentColor),
             contentAlignment = Alignment.Center
@@ -714,14 +775,15 @@ private fun BottomMediaBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            TextButton(onClick = onConnectClick) { Text("Connect") }
+            TextButton(modifier = Modifier.testTag("bottom_connect_button"), onClick = onConnectClick) { Text("Connect") }
             Button(
+                modifier = Modifier.testTag("bottom_remote_button"),
                 onClick = onRemoteClick,
                 colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
                 shape = RoundedCornerShape(28.dp),
                 contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
             ) { Text("Remote", fontWeight = FontWeight.Bold) }
-            TextButton(onClick = onConnectClick) { Text("TV") }
+            TextButton(modifier = Modifier.testTag("bottom_tv_button"), onClick = onConnectClick) { Text("TV") }
         }
     }
 }
@@ -748,9 +810,10 @@ private fun ConnectTvDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        modifier = Modifier.testTag("connect_dialog"),
+        confirmButton = { TextButton(modifier = Modifier.testTag("connect_done_button"), onClick = onDismiss) { Text("Done") } },
         dismissButton = {
-            TextButton(enabled = selectedDevice != null, onClick = onForget) { Text("Forget TV") }
+            TextButton(modifier = Modifier.testTag("forget_tv_button"), enabled = selectedDevice != null, onClick = onForget) { Text("Forget TV") }
         },
         title = { Text("Connect TV") },
         text = {
@@ -762,12 +825,15 @@ private fun ConnectTvDialog(
                     Text("Selected: ${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
                     Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}", style = MaterialTheme.typography.bodySmall)
                 } ?: Text("No TV selected.", color = AccentColor, fontWeight = FontWeight.Bold)
-                Button(enabled = !isDiscovering, onClick = onDiscover) {
+                Button(modifier = Modifier.testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
                     Text(if (isDiscovering) "Discovering..." else "Discover TV")
                 }
                 Text(discoveryStatus, style = MaterialTheme.typography.bodySmall)
                 discoveredDevices.forEach { device ->
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Card(
+                        modifier = Modifier.testTag("discovered_device_card"),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
                         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
                             Text(
@@ -781,7 +847,7 @@ private fun ConnectTvDialog(
                             device.handshake?.let { handshake ->
                                 Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
-                            Button(onClick = { onUseDevice(device) }) { Text("Use ${device.ip}") }
+                            Button(modifier = Modifier.testTag("use_discovered_device_button"), onClick = { onUseDevice(device) }) { Text("Use ${device.ip}") }
                         }
                     }
                 }
@@ -790,7 +856,7 @@ private fun ConnectTvDialog(
                     onValueChange = onTvIpChange,
                     label = { Text("Manual TV IP") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("manual_tv_ip")
                 )
                 Text("Advanced identity", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(
@@ -798,23 +864,23 @@ private fun ConnectTvDialog(
                     onValueChange = onTclPhoneNameChange,
                     label = { Text("Phone name") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("phone_name_field")
                 )
                 OutlinedTextField(
                     value = tclUuid,
                     onValueChange = onTclUuidChange,
                     label = { Text("Handshake UUID") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("handshake_uuid_field")
                 )
                 OutlinedTextField(
                     value = tclPhoneImei,
                     onValueChange = onTclPhoneImeiChange,
                     label = { Text("Stable phone ID") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("stable_phone_id_field")
                 )
-                TextButton(onClick = onUseAndroidId) { Text("Use this app's Android ID") }
+                TextButton(modifier = Modifier.testTag("use_android_id_button"), onClick = onUseAndroidId) { Text("Use this app's Android ID") }
             }
         }
     )
@@ -829,7 +895,8 @@ private fun RemoteControlDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        modifier = Modifier.testTag("remote_dialog"),
+        confirmButton = { TextButton(modifier = Modifier.testTag("remote_close_button"), onClick = onDismiss) { Text("Close") } },
         title = { Text("Remote") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -877,7 +944,7 @@ private fun RemoteButton(
     Button(
         enabled = !disabled,
         onClick = { onClick(label, keyCode) },
-        modifier = Modifier.width(82.dp),
+        modifier = Modifier.width(82.dp).testTag("remote_button_${label.replace(" ", "_").replace("+", "plus").replace("-", "minus")}"),
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
         colors = ButtonDefaults.buttonColors(containerColor = PanelColor)
     ) {
@@ -898,6 +965,42 @@ private data class Tcl6553ScreenshotResult(
     val url: String,
     val log: String
 )
+
+private fun testTclDevice(): TclDiscoveryDevice = TclDiscoveryDevice(
+    ip = "192.0.2.10",
+    name = "Test Living Room TV",
+    source = "ui-test",
+    mac = "00:11:22:33:44:55",
+    algorithmType = "1",
+    handshake = "159>>Test Living Room TV>>0>>0>>0>>0>>1"
+)
+
+private suspend fun createTestTclScreenshot(imageDirectory: File): Tcl6553ScreenshotResult = withContext(Dispatchers.IO) {
+    imageDirectory.mkdirs()
+    val width = 96
+    val height = 54
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    for (y in 0 until height) {
+        for (x in 0 until width) {
+            val red = 40 + (x * 160 / width)
+            val green = 30 + (y * 120 / height)
+            val blue = if ((x + y) % 14 < 7) 110 else 190
+            bitmap.setPixel(x, y, AndroidColor.rgb(red, green, blue))
+        }
+    }
+    val output = ByteArrayOutputStream()
+    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) { "Could not encode test capture" }
+    val bytes = output.toByteArray()
+    val file = File(imageDirectory, "TestCapture-${System.currentTimeMillis()}.png")
+    file.writeBytes(bytes)
+    Tcl6553ScreenshotResult(
+        bitmap = bitmap,
+        byteCount = bytes.size,
+        file = file,
+        url = "test://capture",
+        log = "Generated test capture"
+    )
+}
 
 private data class TclPacket(
     val raw: ByteArray,
