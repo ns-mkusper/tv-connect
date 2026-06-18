@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs adb on the remote ThinkPad that has the Ulefone plugged in.
-# Set THINKPAD_HOST to the SSH alias or address from your home-lab repo/inventory.
+# Run adb on the remote ThinkPad.
+# Set THINKPAD_HOST to the SSH name for that machine.
 THINKPAD_HOST=${THINKPAD_HOST:-poland-thinkpad}
 
 if [[ $# -eq 0 ]]; then

@@ -7,6 +7,7 @@ import java.io.DataOutputStream
 import java.io.File
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -70,6 +71,59 @@ class TclProtocolHelpersTest {
         val decrypted = invoke("decryptTclAes", raw) as ByteArray
 
         assertEquals(text, decrypted.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun preferredScreenshotPortsLeadFallbackScanOrder() {
+        val order = invoke("prioritizedPortOrder", 4, 32769, listOf(32770, 32768, 32770, 9999)) as IntArray
+
+        assertEquals(4, order.size)
+        assertEquals(32770, order[0])
+        assertEquals(32768, order[1])
+        assertFalse(order.contains(9999))
+    }
+
+    @Test
+    fun staleScreenshotPortIsNotPreferredDuringFallbackScan() {
+        val order = invoke("prioritizedPortOrder", 4, 32770, listOf(32770, 32768)) as IntArray
+
+        assertEquals(32768, order[0])
+        assertFalse(order.take(1).contains(32770))
+    }
+
+    @Test
+    fun fastCaptureUiStatusShowsReadyAndDisconnectedStates() {
+        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+            ?: error("Expected enum constants")
+        val ready = constants.single { (it as Enum<*>).name == "READY" }
+
+        val readyStatus = invoke("fastCaptureUiStatus", true, ready) ?: error("Expected ready status")
+        assertEquals("TV fully connected — fast capture ready", field(readyStatus, "title"))
+        assertEquals("Fast ready", field(readyStatus, "captureSubtitle"))
+        assertEquals(true, field(readyStatus, "ready"))
+
+        val disconnectedStatus = invoke("fastCaptureUiStatus", false, ready) ?: error("Expected disconnected status")
+        assertEquals("Connect TV for fast capture", field(disconnectedStatus, "title"))
+        assertEquals("Connect TV", field(disconnectedStatus, "captureSubtitle"))
+        assertEquals(false, field(disconnectedStatus, "ready"))
+    }
+
+    @Test
+    fun fastCaptureUiStatusShowsPreparingAndFallbackStates() {
+        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+            ?: error("Expected enum constants")
+        val warming = constants.single { (it as Enum<*>).name == "WARMING" }
+        val fallback = constants.single { (it as Enum<*>).name == "FALLBACK_ONLY" }
+
+        val warmingStatus = invoke("fastCaptureUiStatus", true, warming) ?: error("Expected warming status")
+        assertEquals("TV connected — preparing fast capture", field(warmingStatus, "title"))
+        assertEquals("Preparing", field(warmingStatus, "captureSubtitle"))
+        assertEquals(false, field(warmingStatus, "ready"))
+
+        val fallbackStatus = invoke("fastCaptureUiStatus", true, fallback) ?: error("Expected fallback status")
+        assertEquals("TV connected — fallback capture only", field(fallbackStatus, "title"))
+        assertEquals("Fallback", field(fallbackStatus, "captureSubtitle"))
+        assertEquals(false, field(fallbackStatus, "ready"))
     }
 
     @Test
