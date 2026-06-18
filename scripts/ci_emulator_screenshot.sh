@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Intended to run inside a CI job where an Android emulator is already booted.
-# Example: reactivecircus/android-emulator-runner script step.
+# Run this after the Android emulator starts in CI.
 
 APK=${APK:-app/build/outputs/apk/debug/app-debug.apk}
 OUT=${OUT:-captures/compose-workbench-emulator.png}

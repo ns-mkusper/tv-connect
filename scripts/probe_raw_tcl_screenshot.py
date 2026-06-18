@@ -57,7 +57,7 @@ def probe(ip: str, port: int, timeout: float) -> bytes:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Probe TCL raw screenshot socket")
+    parser = argparse.ArgumentParser(description="Check the raw TV screenshot socket")
     parser.add_argument("tv_ip", help="TV IP address")
     parser.add_argument("output", nargs="?", help="output image path; extension auto-added if omitted")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"TCP port (default: {DEFAULT_PORT})")

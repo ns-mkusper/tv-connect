@@ -229,7 +229,7 @@ def download_with_retries(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Probe TCL TCP 6553 handshake/screenshot command")
+    parser = argparse.ArgumentParser(description="Check the TV screenshot command socket")
     parser.add_argument("tv_ip", help="TV IP address")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)

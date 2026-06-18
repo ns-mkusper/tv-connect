@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       run_ui_tests:
-        description: 'Run connected Compose UI tests and upload emulator screenshot'
+        description: 'Run UI tests and upload a screenshot'
         required: true
         default: true
         type: boolean
       run_screenshot_comparison:
-        description: 'Run before/after emulator screenshot comparison for a PR'
+        description: 'Compare screenshots for a PR'
         required: true
         default: false
         type: boolean
       pr_number:
-        description: 'PR number for before/after screenshot comparison'
+        description: 'PR number to check'
         required: false
         type: string
 

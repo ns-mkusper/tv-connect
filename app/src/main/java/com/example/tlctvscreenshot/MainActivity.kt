@@ -1078,31 +1078,31 @@ private data class FastCaptureUiStatus(
 private fun fastCaptureUiStatus(connected: Boolean, state: Tcl6553SessionState): FastCaptureUiStatus = when {
     !connected -> FastCaptureUiStatus(
         title = "Connect TV for fast capture",
-        detail = "Open discovery and connect to your TV before capturing.",
+        detail = "Connect to your TV before capturing.",
         captureSubtitle = "Connect TV",
         ready = false
     )
     state == Tcl6553SessionState.READY -> FastCaptureUiStatus(
         title = "TV fully connected — fast capture ready",
-        detail = "The TV session is pre-connected, so Capture TV uses the fastest screenshot path.",
+        detail = "The TV is ready for the fastest screenshots.",
         captureSubtitle = "Fast ready",
         ready = true
     )
     state == Tcl6553SessionState.WARMING -> FastCaptureUiStatus(
         title = "TV connected — preparing fast capture",
-        detail = "The app is opening the TV session. Captures can fall back until this is ready.",
+        detail = "The app is getting the TV ready. Capture can still work.",
         captureSubtitle = "Preparing",
         ready = false
     )
     state == Tcl6553SessionState.RECONNECTING -> FastCaptureUiStatus(
         title = "TV connected — fast capture reconnecting",
-        detail = "The fast session dropped and is being restored. Capture may use fallback.",
+        detail = "The app is reconnecting. Capture can still work.",
         captureSubtitle = "Reconnecting",
         ready = false
     )
     else -> FastCaptureUiStatus(
         title = "TV connected — fallback capture only",
-        detail = "Fast capture is not ready. Captures still work, but may be less frame-accurate.",
+        detail = "Fast capture is not ready. Capture can still work.",
         captureSubtitle = "Fallback",
         ready = false
     )
@@ -1340,7 +1340,7 @@ private suspend fun discoverTclTvs(
                     )
                 }
             } catch (_: SocketTimeoutException) {
-                // Keep sending until the discovery window closes.
+                // Keep looking until time runs out.
             }
         }
     }

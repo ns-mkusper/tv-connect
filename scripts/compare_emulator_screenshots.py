@@ -33,7 +33,7 @@ def write_diff(before_path: Path, after_path: Path, diff_path: Path) -> bool:
     if raw_diff.getbbox() is None:
         return False
 
-    # Red overlay highlights changed pixels while retaining the after screenshot context.
+    # Red marks changed pixels on the new screenshot.
     mask = raw_diff.convert("L").point(lambda value: 220 if value else 0)
     overlay = Image.new("RGBA", size, (255, 0, 0, 180))
     output = Image.alpha_composite(after_rgba, Image.composite(overlay, Image.new("RGBA", size), mask))
