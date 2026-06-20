@@ -3,6 +3,7 @@ package com.example.tlctvscreenshot
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
@@ -125,10 +126,11 @@ private const val HTTP_PORT_SCAN_LAST_PORT = 60999
 private const val HTTP_PORT_SCAN_CONNECT_TIMEOUT_MS = 75
 private const val HTTP_PORT_SCAN_READ_TIMEOUT_MS = 1_000
 private const val HTTP_PORT_SCAN_PARALLELISM = 384
-private const val HTTP_PORT_SCAN_START_DELAY_MS = 150L
+private const val HTTP_PORT_SCAN_START_DELAY_MS = 0L
 private const val HTTP_PORT_SCAN_TIMEOUT_MS = 12_000L
 private const val TCL_SCREENSHOT_SHOT_COUNT = 1
 private const val TCL_SESSION_HEARTBEAT_INTERVAL_MS = 15_000L
+private const val TCL_SESSION_RETRY_DELAY_MS = 2_000L
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
 private const val LOG_TAG = "TlcTvCapture"
@@ -184,6 +186,7 @@ private fun TlcTvScreenshotApp(testMode: Boolean = false) {
 @Composable
 private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val context = LocalContext.current
+    remember(context) { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
     val tclSessionManager = remember { Tcl6553SessionManager() }
@@ -345,7 +348,15 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                 selectedScreenshot = result.file
                 galleryBitmap = result.bitmap
                 screenshots = loadScreenshotFiles(context)
-                tclStatus = "Captured ${formatFileSize(result.byteCount.toLong())} from TV."
+                tclStatus = buildString {
+                    append("Captured ${formatFileSize(result.byteCount.toLong())} from TV")
+                    if (result.timingSummary.isNotBlank()) {
+                        append("\n")
+                        append(result.timingSummary)
+                    } else {
+                        append(".")
+                    }
+                }
                 galleryStatus = "Added ${result.file.name} to Gallery. Publishing to Pictures..."
                 coroutineScope.launch {
                     runCatching { exportScreenshotToPictures(context.applicationContext, result.file) }
@@ -1049,8 +1060,34 @@ private data class Tcl6553ScreenshotResult(
     val byteCount: Int,
     val file: File,
     val url: String,
-    val log: String
+    val log: String,
+    val timingSummary: String = ""
 )
+
+private data class TclCaptureTimingSegment(
+    val label: String,
+    val durationMs: Long
+)
+
+private class TclCaptureTrace(
+    private val startedAt: Long = System.currentTimeMillis()
+) {
+    private var lastMarkAt = startedAt
+    private val segments = mutableListOf<TclCaptureTimingSegment>()
+
+    fun mark(label: String) {
+        val now = System.currentTimeMillis()
+        val duration = (now - lastMarkAt).coerceAtLeast(0L)
+        if (duration > 0L || segments.isNotEmpty()) {
+            segments += TclCaptureTimingSegment(label, duration)
+        }
+        lastMarkAt = now
+    }
+
+    fun totalMs(): Long = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+
+    fun summary(): String = formatCaptureTimingSummary(segments, totalMs())
+}
 
 private data class Tcl6553SessionConfig(
     val tvIp: String,
@@ -1278,6 +1315,22 @@ private fun formatFileSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun formatDurationMs(durationMs: Long): String = when {
+    durationMs >= 1_000L -> "%.1fs".format(durationMs / 1_000.0)
+    else -> "${durationMs}ms"
+}
+
+private fun formatCaptureTimingSummary(segments: List<TclCaptureTimingSegment>, totalMs: Long): String {
+    if (segments.isEmpty()) return "Done in ${formatDurationMs(totalMs)}."
+    val maxDuration = segments.maxOf { it.durationMs }.coerceAtLeast(1L)
+    val rows = segments.joinToString("\n") { segment ->
+        val barLength = ((segment.durationMs * 12L) / maxDuration).coerceIn(1L, 12L).toInt()
+        val bar = "█".repeat(barLength)
+        "${segment.label}: ${formatDurationMs(segment.durationMs)} $bar"
+    }
+    return "Done in ${formatDurationMs(totalMs)}\n$rows"
 }
 
 private data class TclDiscoveryPacket(
@@ -1532,6 +1585,7 @@ private class Tcl6553SessionManager {
                     Log.i(LOG_TAG, "${System.currentTimeMillis()} warm session ready")
                 } else if (session == null) {
                     _state.value = Tcl6553SessionState.FALLBACK_ONLY
+                    scheduleWarmRetryLocked(scope, config)
                 }
             }
         }
@@ -1551,6 +1605,23 @@ private class Tcl6553SessionManager {
             .getOrNull()
     }
 
+    fun reconnect() {
+        synchronized(stateLock) {
+            val opened = session
+            if (opened != null) {
+                session = null
+                opened.close()
+            }
+            val nextConfig = config
+            val nextScope = scope
+            if (nextConfig != null && nextScope != null) {
+                startWarmLocked(nextScope, nextConfig, Tcl6553SessionState.RECONNECTING)
+            } else {
+                _state.value = Tcl6553SessionState.FALLBACK_ONLY
+            }
+        }
+    }
+
     fun clear() {
         synchronized(stateLock) {
             config = null
@@ -1560,6 +1631,18 @@ private class Tcl6553SessionManager {
     }
 
     fun close() = clear()
+
+    private fun scheduleWarmRetryLocked(scope: CoroutineScope, config: Tcl6553SessionConfig) {
+        warmJob?.cancel()
+        warmJob = scope.launch(Dispatchers.IO) {
+            delay(TCL_SESSION_RETRY_DELAY_MS)
+            synchronized(stateLock) {
+                if (this@Tcl6553SessionManager.config == config && session == null) {
+                    startWarmLocked(scope, config, Tcl6553SessionState.RECONNECTING)
+                }
+            }
+        }
+    }
 
     private fun startKeepAliveLocked(scope: CoroutineScope) {
         keepAliveJob?.cancel()
@@ -1680,10 +1763,21 @@ private suspend fun captureTcl6553Screenshot(
     sessionManager: Tcl6553SessionManager? = null
 ): Tcl6553ScreenshotResult = withContext(Dispatchers.IO) {
     val log = StringBuilder()
+    val trace = TclCaptureTrace()
     sessionManager?.captureScreenshotUrl(log)?.let { url ->
+        trace.mark("Fast TV command")
         log.protocolLog("download warm url $url")
-        return@withContext saveTclScreenshotResult(url, downloadScreenshotWithRetries(url, log), imageDirectory, log)
+        runCatching {
+            val bytes = downloadScreenshotWithRetries(url, log, trace, allowPortScan = false)
+            saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
+        }.onSuccess { result ->
+            return@withContext result
+        }.onFailure { error ->
+            log.protocolLog("warm download failed; retrying with cold capture: ${error.message ?: error::class.java.simpleName}")
+            trace.mark("Warm download failed")
+        }
     }
+    trace.mark("Fast connection check")
     Socket().use { socket ->
         socket.soTimeout = SOCKET_READ_TIMEOUT_MS
         socket.tcpNoDelay = true
@@ -1713,6 +1807,7 @@ private suspend fun captureTcl6553Screenshot(
             response.startsWith("150>>") || response.startsWith("225>>")
         }
         require(heartbeatAck == "150>>YES") { "Unexpected heartbeat response: $heartbeatAck" }
+        trace.mark("Cold setup")
 
         val shot = "225>>"
         val shotUrls = mutableListOf<String>()
@@ -1730,9 +1825,11 @@ private suspend fun captureTcl6553Screenshot(
             shotUrls += shotUrl
             log.protocolLog("download url $shotUrl")
         }
+        trace.mark("TV screenshot wait")
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
-        saveTclScreenshotResult(url, downloadScreenshotWithRetries(url, log), imageDirectory, log)
+        val bytes = downloadScreenshotWithRetries(url, log, trace)
+        saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
     }
 }
 
@@ -1827,7 +1924,8 @@ private fun saveTclScreenshotResult(
     url: String,
     imageBytes: ByteArray,
     imageDirectory: File,
-    log: StringBuilder
+    log: StringBuilder,
+    trace: TclCaptureTrace? = null
 ): Tcl6553ScreenshotResult {
     val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
@@ -1836,36 +1934,70 @@ private fun saveTclScreenshotResult(
     val file = File(imageDirectory, "TCast6553-${System.currentTimeMillis()}.${imageExtension(imageBytes)}")
     file.writeBytes(imageBytes)
 
+    trace?.mark("Decode and save")
     return Tcl6553ScreenshotResult(
         bitmap = bitmap,
         byteCount = imageBytes.size,
         file = file,
         url = url,
-        log = log.toString().trim()
+        log = log.toString().trim(),
+        timingSummary = trace?.summary().orEmpty()
     )
 }
 
 private object ScreenshotPortCache {
     private const val MAX_PORTS_PER_PATH = 8
+    private const val PREFERENCES_NAME = "screenshot_port_cache"
     private val portsByTarget = mutableMapOf<String, ArrayDeque<Int>>()
+    private var preferences: SharedPreferences? = null
+
+    fun bind(context: Context) {
+        synchronized(portsByTarget) {
+            if (preferences != null) return
+            preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE).also { stored ->
+                stored.all.forEach { (key, value) ->
+                    val ports = (value as? String)
+                        ?.split(',')
+                        ?.mapNotNull { it.toIntOrNull() }
+                        ?.filter { it in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT }
+                        ?.distinct()
+                        .orEmpty()
+                    if (ports.isNotEmpty()) portsByTarget[key] = ArrayDeque(ports)
+                }
+            }
+        }
+    }
 
     fun remember(host: String, path: String, port: Int) {
         if (port !in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT) return
-        val key = "$host$path"
+        val key = cacheKey(host, path)
         synchronized(portsByTarget) {
             val ports = portsByTarget.getOrPut(key) { ArrayDeque() }
             ports.remove(port)
             ports.addFirst(port)
             while (ports.size > MAX_PORTS_PER_PATH) ports.removeLast()
+            preferences?.edit()?.putString(key, ports.joinToString(","))?.commit()
         }
     }
 
     fun portsFor(host: String, path: String): List<Int> = synchronized(portsByTarget) {
-        portsByTarget["$host$path"]?.toList().orEmpty()
+        portsByTarget[cacheKey(host, path)]?.toList().orEmpty()
     }
+
+    private fun cacheKey(host: String, path: String): String = "$host|$path"
 }
 
-private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): ByteArray {
+private fun downloadScreenshotWithRetries(
+    url: String,
+    log: StringBuilder,
+    trace: TclCaptureTrace? = null,
+    allowPortScan: Boolean = true
+): ByteArray {
+    findScreenshotOnCachedHttpPort(url, log)?.let { bytes ->
+        trace?.mark("Cached download")
+        return bytes
+    }
+
     var lastError: Throwable? = null
     repeat(HTTP_DOWNLOAD_ATTEMPTS) { index ->
         try {
@@ -1873,19 +2005,48 @@ private fun downloadScreenshotWithRetries(url: String, log: StringBuilder): Byte
             val bytes = downloadScreenshotUrl(url)
             require(bytes.size in 1..MAX_SCREENSHOT_BYTES) { "Unexpected image byte count: ${bytes.size}" }
             rememberScreenshotPort(url)
+            trace?.mark("Direct download")
             return bytes
         } catch (error: Throwable) {
             lastError = error
             log.protocolLog("download failed: ${error.message ?: error::class.java.simpleName}")
+            if (!allowPortScan) {
+                log.protocolLog("direct download missed; skipping port scan")
+                throw screenshotDownloadFailure(lastError, log)
+            }
             if (index + 1 == HTTP_DIRECT_ATTEMPTS_BEFORE_PORT_SCAN) {
-                findScreenshotOnFreshHttpPort(url, log)?.let { return it }
+                findScreenshotOnFreshHttpPort(url, log, trace)?.let { return it }
+                log.protocolLog("port scan missed screenshot; stopping stale URL retries")
+                throw screenshotDownloadFailure(lastError, log)
             }
             Thread.sleep(HTTP_DOWNLOAD_RETRY_DELAY_MS)
         }
     }
-    throw IllegalStateException(
+    throw screenshotDownloadFailure(lastError, log)
+}
+
+private fun screenshotDownloadFailure(lastError: Throwable?, log: StringBuilder): IllegalStateException =
+    IllegalStateException(
         "Downloaded screenshot URL never opened: ${lastError?.message ?: lastError?.javaClass?.simpleName}\n${log.toString().trim()}"
     )
+
+private fun findScreenshotOnCachedHttpPort(url: String, log: StringBuilder): ByteArray? {
+    val parsed = URL(url)
+    val stalePort = parsed.port
+    val host = parsed.host.takeIf { it.isNotBlank() } ?: return null
+    val path = parsed.file.takeIf { it.isNotBlank() } ?: "/"
+    val ports = ScreenshotPortCache.portsFor(host, path).filter { it != stalePort }
+    if (ports.isEmpty()) return null
+
+    log.protocolLog("cached port probe start host=$host path=$path ports=${ports.joinToString(",")}")
+    for (port in ports) {
+        val result = probeScreenshotPort(host, port, path, AtomicInteger(24)) ?: continue
+        ScreenshotPortCache.remember(host, path, result.first)
+        log.protocolLog("cached port found screenshot port=${result.first} bytes=${result.second.size}")
+        return result.second
+    }
+    log.protocolLog("cached port probe missed count=${ports.size}")
+    return null
 }
 
 private fun rememberScreenshotPort(url: String) {
@@ -1912,16 +2073,19 @@ private fun downloadScreenshotUrl(url: String): ByteArray {
     }
 }
 
-private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): ByteArray? {
+private fun findScreenshotOnFreshHttpPort(
+    url: String,
+    log: StringBuilder,
+    trace: TclCaptureTrace? = null
+): ByteArray? {
     val parsed = URL(url)
     val stalePort = parsed.port
     val host = parsed.host.takeIf { it.isNotBlank() } ?: return null
     val path = buildString {
         append(parsed.file.takeIf { it.isNotBlank() } ?: "/")
     }
-    val portCount = HTTP_PORT_SCAN_LAST_PORT - HTTP_PORT_SCAN_FIRST_PORT + 1
     val preferredPorts = ScreenshotPortCache.portsFor(host, path)
-    var portOrder = prioritizedPortOrder(portCount, stalePort, preferredPorts)
+    var portOrder = prioritizedPortOrder(stalePort, preferredPorts)
     val stopped = AtomicBoolean(false)
     val probeLogCount = AtomicInteger(0)
     val workers = minOf(HTTP_PORT_SCAN_PARALLELISM, portOrder.size)
@@ -1937,7 +2101,6 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
         while (!stopped.get() && submitted - completed < workers && nextPortIndex < portOrder.size) {
             val port = portOrder[nextPortIndex]
             nextPortIndex += 1
-            if (port == stalePort) continue
             completion.submit(Callable {
                 if (stopped.get()) null else probeScreenshotPort(host, port, path, probeLogCount)
             })
@@ -1959,7 +2122,7 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
                 if (nextPortIndex >= portOrder.size) {
                     pass += 1
                     nextPortIndex = 0
-                    portOrder = prioritizedPortOrder(portCount, stalePort, preferredPorts)
+                    portOrder = prioritizedPortOrder(stalePort, preferredPorts)
                     log.protocolLog("port scan retry pass=$pass submitted=$submitted completed=$completed")
                 }
                 submitNext()
@@ -1980,6 +2143,7 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
                 log.protocolLog(
                     "port scan found screenshot port=${result.first} bytes=${result.second.size} submitted=$submitted completed=$completed pass=$pass"
                 )
+                trace?.mark("Port scan")
                 return result.second
             }
             submitNext()
@@ -1989,44 +2153,24 @@ private fun findScreenshotOnFreshHttpPort(url: String, log: StringBuilder): Byte
         executor.shutdownNow()
     }
     log.protocolLog("port scan timeout submitted=$submitted completed=$completed next=$nextPortIndex pass=$pass")
+    trace?.mark("Port scan timeout")
     return null
 }
 
-private fun prioritizedPortOrder(portCount: Int, stalePort: Int, preferredPorts: List<Int>): IntArray {
+private fun prioritizedPortOrder(stalePort: Int, preferredPorts: List<Int>): IntArray {
     val preferred = preferredPorts
         .asSequence()
         .filter { it in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT && it != stalePort }
         .distinct()
         .toList()
-    if (preferred.isEmpty()) return randomizedPortOrder(portCount, stalePort)
-
     val preferredSet = preferred.toSet()
-    val randomizedTail = randomizedPortOrder(portCount, stalePort).filter { it !in preferredSet }
-    return (preferred + randomizedTail).toIntArray()
+    val directPortRetry = sequenceOf(stalePort)
+        .filter { it in HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT }
+    val ascendingTail = (HTTP_PORT_SCAN_FIRST_PORT..HTTP_PORT_SCAN_LAST_PORT)
+        .asSequence()
+        .filter { it != stalePort && it !in preferredSet }
+    return (preferred.asSequence() + directPortRetry + ascendingTail).toList().toIntArray()
 }
-
-private fun randomizedPortOrder(portCount: Int, stalePort: Int): IntArray {
-    val ports = IntArray(portCount)
-    val staleOffset = (stalePort - HTTP_PORT_SCAN_FIRST_PORT).coerceIn(0, portCount - 1)
-    val seed = (System.nanoTime() xor stalePort.toLong()).toPositiveInt()
-    val start = (staleOffset + seed).floorMod(portCount)
-    var step = (seed or 1).floorMod(portCount).coerceAtLeast(1)
-    while (greatestCommonDivisor(step, portCount) != 1) {
-        step += 2
-        if (step >= portCount) step = 1
-    }
-    for (index in 0 until portCount) {
-        ports[index] = HTTP_PORT_SCAN_FIRST_PORT + ((start + index * step).floorMod(portCount))
-    }
-    return ports
-}
-
-private fun Long.toPositiveInt(): Int = (this and Int.MAX_VALUE.toLong()).toInt()
-
-private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus
-
-private tailrec fun greatestCommonDivisor(left: Int, right: Int): Int =
-    if (right == 0) left else greatestCommonDivisor(right, left % right)
 
 private fun probeScreenshotPort(
     host: String,
