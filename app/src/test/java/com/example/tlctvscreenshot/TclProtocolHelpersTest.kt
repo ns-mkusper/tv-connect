@@ -75,20 +75,23 @@ class TclProtocolHelpersTest {
 
     @Test
     fun preferredScreenshotPortsLeadFallbackScanOrder() {
-        val order = invoke("prioritizedPortOrder", 4, 32769, listOf(32770, 32768, 32770, 9999)) as IntArray
+        val order = invoke("prioritizedPortOrder", 32769, listOf(32770, 32768, 32770, 9999)) as IntArray
 
-        assertEquals(4, order.size)
+        assertEquals(28_232, order.size)
         assertEquals(32770, order[0])
         assertEquals(32768, order[1])
+        assertEquals(32769, order[2])
+        assertEquals(32771, order[3])
         assertFalse(order.contains(9999))
     }
 
     @Test
     fun staleScreenshotPortIsNotPreferredDuringFallbackScan() {
-        val order = invoke("prioritizedPortOrder", 4, 32770, listOf(32770, 32768)) as IntArray
+        val order = invoke("prioritizedPortOrder", 32770, listOf(32770, 32768)) as IntArray
 
         assertEquals(32768, order[0])
-        assertFalse(order.take(1).contains(32770))
+        assertEquals(32770, order[1])
+        assertEquals(32769, order[2])
     }
 
     @Test
@@ -124,6 +127,24 @@ class TclProtocolHelpersTest {
         assertEquals("TV connected — fallback capture only", field(fallbackStatus, "title"))
         assertEquals("Fallback", field(fallbackStatus, "captureSubtitle"))
         assertEquals(false, field(fallbackStatus, "ready"))
+    }
+
+    @Test
+    fun captureTimingSummaryShowsTotalAndBars() {
+        val segmentClass = Class.forName("com.example.tlctvscreenshot.TclCaptureTimingSegment")
+        val constructor = segmentClass.declaredConstructors.single()
+        constructor.isAccessible = true
+        val segments = listOf(
+            constructor.newInstance("TV wait", 1_200L),
+            constructor.newInstance("Download", 100L)
+        )
+
+        val summary = invoke("formatCaptureTimingSummary", segments, 1_350L) as String
+
+        assertTrue(summary.contains("Done in 1.4s"))
+        assertTrue(summary.contains("TV wait: 1.2s"))
+        assertTrue(summary.contains("Download: 100ms"))
+        assertTrue(summary.contains("█"))
     }
 
     @Test
