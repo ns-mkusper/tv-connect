@@ -49,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -150,6 +151,48 @@ private const val TCL_KEY_VOLUME_DOWN = 22
 private const val TCL_KEY_MUTE = 23
 private const val TCL_KEY_CHANNEL_UP = 27
 private const val TCL_KEY_CHANNEL_DOWN = 28
+
+private data class TclRemoteButtonSpec(
+    val label: String,
+    val keyCode: Int,
+    val testTag: String = remoteButtonTag(label)
+)
+
+private val TCL_REMOTE_BUTTONS = listOf(
+    TclRemoteButtonSpec("Power", TCL_KEY_POWER),
+    TclRemoteButtonSpec("Home", TCL_KEY_HOME),
+    TclRemoteButtonSpec("Back", TCL_KEY_BACK),
+    TclRemoteButtonSpec("Up", TCL_KEY_UP),
+    TclRemoteButtonSpec("Left", TCL_KEY_LEFT),
+    TclRemoteButtonSpec("OK", TCL_KEY_OK),
+    TclRemoteButtonSpec("Right", TCL_KEY_RIGHT),
+    TclRemoteButtonSpec("Down", TCL_KEY_DOWN),
+    TclRemoteButtonSpec("Vol -", TCL_KEY_VOLUME_DOWN),
+    TclRemoteButtonSpec("Mute", TCL_KEY_MUTE),
+    TclRemoteButtonSpec("Vol +", TCL_KEY_VOLUME_UP),
+    TclRemoteButtonSpec("Menu", TCL_KEY_MENU),
+    TclRemoteButtonSpec("Ch -", TCL_KEY_CHANNEL_DOWN),
+    TclRemoteButtonSpec("Ch +", TCL_KEY_CHANNEL_UP)
+)
+
+private fun tclRemoteButtonSpecs(): List<TclRemoteButtonSpec> = TCL_REMOTE_BUTTONS
+
+private fun tclRemoteButton(label: String): TclRemoteButtonSpec =
+    tclRemoteButtonSpecs().single { it.label == label }
+
+private val TCL_REMOTE_POWER_ROW = listOf("Power", "Home", "Back").map(::tclRemoteButton)
+
+private val TCL_REMOTE_DPAD_CENTER_ROW = listOf("Left", "OK", "Right").map(::tclRemoteButton)
+
+private val TCL_REMOTE_VOLUME_ROW = listOf("Vol -", "Mute", "Vol +").map(::tclRemoteButton)
+
+private val TCL_REMOTE_CHANNEL_ROW = listOf("Menu", "Ch -", "Ch +").map(::tclRemoteButton)
+
+private fun remoteButtonTag(label: String): String =
+    "remote_button_${label.replace(" ", "_").replace("+", "plus").replace("-", "minus")}"
+
+private fun tclRemoteKeyCommand(keyCode: Int): String = "$TCL_REMOTE_KEY_COMMAND>>$keyCode"
+
 private val TCL_AES_KEY = "tnscreentnscreen".toByteArray(Charsets.UTF_8)
 private val TCL_AES_IV = byteArrayOf(
     0x12, 0x34, 0x56, 0x78,
@@ -186,7 +229,7 @@ private fun TlcTvScreenshotApp(testMode: Boolean = false) {
 @Composable
 private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val context = LocalContext.current
-    remember(context) { ScreenshotPortCache.bind(context.applicationContext) }
+    SideEffect { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
     val tclSessionManager = remember { Tcl6553SessionManager() }
@@ -212,7 +255,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var tclStatus by remember { mutableStateOf("Ready to capture from a connected TV.") }
     var remoteStatus by remember { mutableStateOf("Remote ready. Connect a TV before sending commands.") }
     var isCapturingTcl by remember { mutableStateOf(false) }
-    var isSendingRemote by remember { mutableStateOf(false) }
+    var activeRemoteSends by remember { mutableStateOf(0) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
     var discoveryStatus by remember { mutableStateOf("Open discovery to find and connect to a TV.") }
     var isDiscovering by remember { mutableStateOf(false) }
@@ -390,24 +433,33 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             showConnectDialog = true
             return
         }
-        isSendingRemote = true
-        remoteStatus = "Sending $label to $ip..."
+        activeRemoteSends += 1
+        remoteStatus = "Sending $label to TV..."
         coroutineScope.launch {
+            val started = System.currentTimeMillis()
+            val log = StringBuilder()
             runCatching {
-                sendTcl6553RemoteKey(
-                    tvIp = ip,
-                    port = TCL_COMMAND_PORT,
-                    phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
-                    uuid = tclUuid.ifBlank { androidId },
-                    phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
-                    keyCode = keyCode
-                )
-            }.onSuccess {
-                remoteStatus = "Sent $label."
+                val sentWarm = tclSessionManager.sendRemoteKey(keyCode, log)
+                if (!sentWarm) {
+                    sendTcl6553RemoteKey(
+                        tvIp = ip,
+                        port = TCL_COMMAND_PORT,
+                        phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                        uuid = tclUuid.ifBlank { androidId },
+                        phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                        keyCode = keyCode
+                    )
+                }
+                sentWarm
+            }.onSuccess { sentWarm ->
+                val durationMs = System.currentTimeMillis() - started
+                val path = if (sentWarm) "warm" else "cold"
+                Log.i(LOG_TAG, "remote $label sent via $path session in ${durationMs}ms")
+                remoteStatus = "Sent $label in ${formatDurationMs(durationMs)}."
             }.onFailure { error ->
                 remoteStatus = "Remote command failed: ${error.message ?: error::class.java.simpleName}"
             }
-            isSendingRemote = false
+            activeRemoteSends = (activeRemoteSends - 1).coerceAtLeast(0)
         }
     }
 
@@ -464,7 +516,6 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
     if (showRemoteDialog) {
         RemoteControlDialog(
-            isSendingRemote = isSendingRemote,
             remoteStatus = remoteStatus,
             onSendRemoteButton = ::sendRemoteButton,
             onDismiss = { showRemoteDialog = false }
@@ -985,7 +1036,6 @@ private fun ConnectTvDialog(
 
 @Composable
 private fun RemoteControlDialog(
-    isSendingRemote: Boolean,
     remoteStatus: String,
     onSendRemoteButton: (String, Int) -> Unit,
     onDismiss: () -> Unit
@@ -998,32 +1048,32 @@ private fun RemoteControlDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Power", TCL_KEY_POWER, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Home", TCL_KEY_HOME, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Back", TCL_KEY_BACK, isSendingRemote, onSendRemoteButton)
+                    TCL_REMOTE_POWER_ROW.forEach { spec ->
+                        RemoteButton(spec, onSendRemoteButton)
+                    }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Up", TCL_KEY_UP, isSendingRemote, onSendRemoteButton)
+                        RemoteButton(tclRemoteButton("Up"), onSendRemoteButton)
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Left", TCL_KEY_LEFT, isSendingRemote, onSendRemoteButton)
-                        RemoteButton("OK", TCL_KEY_OK, isSendingRemote, onSendRemoteButton)
-                        RemoteButton("Right", TCL_KEY_RIGHT, isSendingRemote, onSendRemoteButton)
+                        TCL_REMOTE_DPAD_CENTER_ROW.forEach { spec ->
+                            RemoteButton(spec, onSendRemoteButton)
+                        }
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        RemoteButton("Down", TCL_KEY_DOWN, isSendingRemote, onSendRemoteButton)
+                        RemoteButton(tclRemoteButton("Down"), onSendRemoteButton)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Vol -", TCL_KEY_VOLUME_DOWN, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Mute", TCL_KEY_MUTE, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Vol +", TCL_KEY_VOLUME_UP, isSendingRemote, onSendRemoteButton)
+                    TCL_REMOTE_VOLUME_ROW.forEach { spec ->
+                        RemoteButton(spec, onSendRemoteButton)
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    RemoteButton("Menu", TCL_KEY_MENU, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Ch -", TCL_KEY_CHANNEL_DOWN, isSendingRemote, onSendRemoteButton)
-                    RemoteButton("Ch +", TCL_KEY_CHANNEL_UP, isSendingRemote, onSendRemoteButton)
+                    TCL_REMOTE_CHANNEL_ROW.forEach { spec ->
+                        RemoteButton(spec, onSendRemoteButton)
+                    }
                 }
                 Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             }
@@ -1033,19 +1083,17 @@ private fun RemoteControlDialog(
 
 @Composable
 private fun RemoteButton(
-    label: String,
-    keyCode: Int,
-    disabled: Boolean,
+    spec: TclRemoteButtonSpec,
     onClick: (String, Int) -> Unit
 ) {
     Button(
-        enabled = !disabled,
-        onClick = { onClick(label, keyCode) },
-        modifier = Modifier.width(82.dp).testTag("remote_button_${label.replace(" ", "_").replace("+", "plus").replace("-", "minus")}"),
+        enabled = true,
+        onClick = { onClick(spec.label, spec.keyCode) },
+        modifier = Modifier.width(82.dp).testTag(spec.testTag),
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
         colors = ButtonDefaults.buttonColors(containerColor = PanelColor)
     ) {
-        Text(label, maxLines = 1)
+        Text(spec.label, maxLines = 1)
     }
 }
 
@@ -1605,6 +1653,20 @@ private class Tcl6553SessionManager {
             .getOrNull()
     }
 
+    suspend fun sendRemoteKey(keyCode: Int, log: StringBuilder): Boolean = withContext(Dispatchers.IO) {
+        val opened = synchronized(stateLock) { session }
+        if (opened == null) {
+            log.protocolLog("warm session unavailable; using cold remote path")
+            return@withContext false
+        }
+        runCatching { opened.sendRemoteKey(keyCode, log) }
+            .onFailure { error ->
+                log.protocolLog("warm session remote failed: ${error.message ?: error::class.java.simpleName}")
+                dropSession(opened)
+            }
+            .isSuccess
+    }
+
     fun reconnect() {
         synchronized(stateLock) {
             val opened = session
@@ -1712,6 +1774,12 @@ private class Tcl6553WarmSession(
             response.startsWith("150>>") || response.startsWith("225>>")
         }
         require(heartbeatAck == "150>>YES") { "Unexpected heartbeat response: $heartbeatAck" }
+    }
+
+    fun sendRemoteKey(keyCode: Int, log: StringBuilder) = synchronized(ioLock) {
+        val command = tclRemoteKeyCommand(keyCode)
+        log.protocolLog("send warm remote $command encrypted=$encrypted")
+        writeTclText(output, command, encrypted = encrypted)
     }
 
     fun close() {
@@ -1858,7 +1926,7 @@ private suspend fun sendTcl6553RemoteKey(
 
         writeTclText(output, "160>>$phoneImei>>$phoneName", encrypted = encrypted)
         writeTclText(output, "150>>", encrypted = encrypted)
-        writeTclText(output, "$TCL_REMOTE_KEY_COMMAND>>$keyCode", encrypted = encrypted)
+        writeTclText(output, tclRemoteKeyCommand(keyCode), encrypted = encrypted)
     }
 }
 

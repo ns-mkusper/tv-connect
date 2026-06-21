@@ -175,15 +175,30 @@ class MediaHomeUiTest {
 
         composeRule.onNodeWithTag("bottom_remote_button").performClick()
         composeRule.onNodeWithTag("remote_dialog").assertIsDisplayed()
-        listOf("Power", "Home", "Back", "Up", "Left", "OK", "Right", "Down", "Vol -", "Mute", "Vol +", "Menu", "Ch -", "Ch +").forEach { label ->
+        val remoteButtons = listOf(
+            "Power" to "remote_button_Power",
+            "Home" to "remote_button_Home",
+            "Back" to "remote_button_Back",
+            "Up" to "remote_button_Up",
+            "Left" to "remote_button_Left",
+            "OK" to "remote_button_OK",
+            "Right" to "remote_button_Right",
+            "Down" to "remote_button_Down",
+            "Vol -" to "remote_button_Vol_minus",
+            "Mute" to "remote_button_Mute",
+            "Vol +" to "remote_button_Vol_plus",
+            "Menu" to "remote_button_Menu",
+            "Ch -" to "remote_button_Ch_minus",
+            "Ch +" to "remote_button_Ch_plus"
+        )
+        remoteButtons.forEach { (label, tag) ->
             assertAnyTextDisplayed(label)
+            composeRule.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled()
         }
-        composeRule.onNodeWithTag("remote_button_Up").performClick()
-        assertAnyTextDisplayed("Test remote sent Up.")
-        composeRule.onNodeWithTag("remote_button_OK").performClick()
-        assertAnyTextDisplayed("Test remote sent OK.")
-        composeRule.onNodeWithTag("remote_button_Back").performClick()
-        assertAnyTextDisplayed("Test remote sent Back.")
+        remoteButtons.forEach { (label, tag) ->
+            composeRule.onNodeWithTag(tag).performClick()
+            assertAnyTextDisplayed("Test remote sent $label.")
+        }
         composeRule.onNodeWithTag("remote_close_button").performClick()
         composeRule.onNodeWithTag("remote_dialog").assertDoesNotExist()
     }
