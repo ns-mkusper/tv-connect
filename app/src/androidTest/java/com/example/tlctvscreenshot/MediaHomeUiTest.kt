@@ -3,6 +3,7 @@ package com.example.tlctvscreenshot
 import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.semantics.SemanticsActions
@@ -75,11 +76,11 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
-        composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed()
+        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("bottom_remote_button").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("fast_capture_status").assertTextContains("Connect TV for fast capture")
-        assertAnyTextDisplayed("Please connect your TV......")
+        composeRule.onNodeWithTag("fast_capture_status", useUnmergedTree = true).assertTextContains("Connect TV for fast capture")
 
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
         composeRule.onNodeWithTag("gallery_section").assertIsDisplayed()
@@ -169,6 +170,16 @@ class MediaHomeUiTest {
     @Test
     fun bottomConnectAndRemoteControlsUpdateStatus() {
         composeRule.onNodeWithTag("bottom_connect_button").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("connect_done_button").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("top_status_area").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("connect_done_button").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("bottom_status_bar").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()

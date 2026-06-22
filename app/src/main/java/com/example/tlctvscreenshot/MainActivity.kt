@@ -581,14 +581,10 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                 )
             }
 
-            StatusPanel(
-                connected = connectedToTv,
-                selectedDevice = selectedDevice,
-                fastCaptureStatus = fastCaptureUiStatus,
+            ActivityStatusPanel(
                 tclStatus = tclStatus,
                 galleryStatus = galleryStatus,
-                remoteStatus = remoteStatus,
-                onConnectClick = { showConnectDialog = true }
+                remoteStatus = remoteStatus
             )
 
             GallerySection(
@@ -645,7 +641,10 @@ private fun MediaHomeHeader(
     onConnectClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onConnectClick)
+            .testTag("top_status_area"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -666,6 +665,7 @@ private fun MediaHomeHeader(
             )
             Text(
                 fastCaptureStatus.title,
+                modifier = Modifier.testTag("fast_capture_status"),
                 style = MaterialTheme.typography.bodySmall,
                 color = if (fastCaptureStatus.ready) SuccessColor else MutedText
             )
@@ -712,14 +712,10 @@ private fun MediaActionTile(
 }
 
 @Composable
-private fun StatusPanel(
-    connected: Boolean,
-    selectedDevice: SelectedTclDevice?,
-    fastCaptureStatus: FastCaptureUiStatus,
+private fun ActivityStatusPanel(
     tclStatus: String,
     galleryStatus: String,
-    remoteStatus: String,
-    onConnectClick: () -> Unit
+    remoteStatus: String
 ) {
     Card(
         modifier = Modifier.testTag("status_panel"),
@@ -727,25 +723,10 @@ private fun StatusPanel(
         shape = RoundedCornerShape(22.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                if (connected) selectedDevice?.let { "${it.name.ifBlank { "TCL TV" }} — ${it.ip}" } ?: "TV IP selected" else "Please connect your TV......",
-                fontWeight = FontWeight.Bold,
-                color = if (connected) SuccessColor else AccentColor
-            )
-            Text(
-                fastCaptureStatus.title,
-                modifier = Modifier.testTag("fast_capture_status"),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (fastCaptureStatus.ready) SuccessColor else AccentColor,
-                fontWeight = FontWeight.Bold
-            )
-            Text(fastCaptureStatus.detail, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            Text("Activity", fontWeight = FontWeight.Bold, color = MutedText)
             Text(tclStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(galleryStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
-            if (!connected) {
-                TextButton(modifier = Modifier.testTag("status_connect_button"), onClick = onConnectClick) { Text("Open discovery and connect") }
-            }
         }
     }
 }
@@ -913,6 +894,7 @@ private fun BottomMediaBar(
                 .fillMaxWidth()
                 .testTag("bottom_status_bar")
                 .height(34.dp)
+                .clickable(onClick = onConnectClick)
                 .background(if (fastCaptureStatus.ready) SuccessColor else AccentColor),
             contentAlignment = Alignment.Center
         ) {
