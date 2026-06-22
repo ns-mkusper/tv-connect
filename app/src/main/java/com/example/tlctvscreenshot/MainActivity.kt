@@ -36,6 +36,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -835,6 +838,22 @@ private fun GallerySection(
     onDelete: (File) -> Unit
 ) {
     val tabs = listOf("All", "Photos", "Videos", "Favorites")
+    var showGalleryPane by remember { mutableStateOf(false) }
+
+    if (showGalleryPane) {
+        GalleryPaneDialog(
+            screenshots = screenshots,
+            selectedScreenshot = selectedScreenshot,
+            onOpen = { file ->
+                onOpen(file)
+                showGalleryPane = false
+            },
+            onShare = onShare,
+            onDelete = onDelete,
+            onDismiss = { showGalleryPane = false }
+        )
+    }
+
     Card(
         modifier = Modifier.testTag("gallery_section"),
         colors = CardDefaults.cardColors(containerColor = PanelColor),
@@ -843,6 +862,7 @@ private fun GallerySection(
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Gallery", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(modifier = Modifier.testTag("gallery_open_pane_button"), enabled = screenshots.isNotEmpty(), onClick = { showGalleryPane = true }) { Text("View all") }
                 TextButton(modifier = Modifier.testTag("gallery_refresh_button"), onClick = onRefresh) { Text("Refresh") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -885,24 +905,165 @@ private fun GallerySection(
                     Text("Capture TV to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    screenshots.chunked(2).forEach { rowFiles ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            rowFiles.forEach { file ->
-                                GalleryItem(
-                                    file = file,
-                                    selected = file == selectedScreenshot,
-                                    onOpen = onOpen,
-                                    onShare = onShare,
-                                    onDelete = onDelete,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            if (rowFiles.size == 1) {
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Recent captures", style = MaterialTheme.typography.bodySmall, color = MutedText)
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp)
+                            .testTag("gallery_strip"),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(end = 4.dp)
+                    ) {
+                        items(screenshots, key = { it.absolutePath }) { file ->
+                            GalleryStripItem(
+                                file = file,
+                                selected = file == selectedScreenshot,
+                                onOpen = onOpen
+                            )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GalleryPaneDialog(
+    screenshots: List<File>,
+    selectedScreenshot: File?,
+    onOpen: (File) -> Unit,
+    onShare: (File) -> Unit,
+    onDelete: (File) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("gallery_pane_dialog"),
+        title = { Text("All captures") },
+        text = {
+            if (screenshots.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No saved captures yet.", color = MutedText, textAlign = TextAlign.Center)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(420.dp)
+                        .testTag("gallery_pane_list"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(vertical = 4.dp)
+                ) {
+                    items(screenshots, key = { it.absolutePath }) { file ->
+                        GalleryPaneItem(
+                            file = file,
+                            selected = file == selectedScreenshot,
+                            onOpen = onOpen,
+                            onShare = onShare,
+                            onDelete = onDelete
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(modifier = Modifier.testTag("gallery_pane_done_button"), onClick = onDismiss) { Text("Done") }
+        }
+    )
+}
+
+@Composable
+private fun GalleryStripItem(
+    file: File,
+    selected: Boolean,
+    onOpen: (File) -> Unit
+) {
+    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
+    Card(
+        modifier = Modifier
+            .width(154.dp)
+            .testTag("gallery_item"),
+        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("gallery_item_preview")
+                    .height(86.dp)
+                    .clickable { onOpen(file) }
+                    .background(Color.Black, RoundedCornerShape(14.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Saved TV capture ${file.name}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("Preview unavailable", style = MaterialTheme.typography.bodySmall, color = MutedText, textAlign = TextAlign.Center)
+                }
+            }
+            Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(formatTimestamp(file.lastModified()), style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
+        }
+    }
+}
+
+@Composable
+private fun GalleryPaneItem(
+    file: File,
+    selected: Boolean,
+    onOpen: (File) -> Unit,
+    onShare: (File) -> Unit,
+    onDelete: (File) -> Unit
+) {
+    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
+    Card(
+        modifier = Modifier.testTag("gallery_pane_item"),
+        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(82.dp)
+                    .background(Color.Black, RoundedCornerShape(14.dp))
+                    .clickable { onOpen(file) },
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Saved TV capture ${file.name}",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("No preview", style = MaterialTheme.typography.labelSmall, color = MutedText, textAlign = TextAlign.Center)
+                }
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(modifier = Modifier.testTag("gallery_pane_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
+                    TextButton(modifier = Modifier.testTag("gallery_pane_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
+                    TextButton(modifier = Modifier.testTag("gallery_pane_item_delete_button"), onClick = { onDelete(file) }) { Text("Delete") }
                 }
             }
         }
@@ -920,53 +1081,6 @@ private fun GalleryTab(tab: String, selected: Boolean, onClick: () -> Unit) {
         )
     ) {
         Text(tab)
-    }
-}
-
-@Composable
-private fun GalleryItem(
-    file: File,
-    selected: Boolean,
-    onOpen: (File) -> Unit,
-    onShare: (File) -> Unit,
-    onDelete: (File) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
-    Card(
-        modifier = modifier.testTag("gallery_item"),
-        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("gallery_item_preview")
-                    .height(105.dp)
-                    .clickable { onOpen(file) }
-                    .background(Color.Black, RoundedCornerShape(14.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Saved TV capture ${file.name}",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text("Preview unavailable", style = MaterialTheme.typography.bodySmall, color = MutedText, textAlign = TextAlign.Center)
-                }
-            }
-            Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TextButton(modifier = Modifier.testTag("gallery_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
-                TextButton(modifier = Modifier.testTag("gallery_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
-            }
-            TextButton(modifier = Modifier.testTag("gallery_item_delete_button"), onClick = { onDelete(file) }) { Text("Delete") }
-        }
     }
 }
 
@@ -1122,8 +1236,12 @@ private fun ConnectTvDialog(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(modifier = Modifier.testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
-                        Text(if (isDiscovering) searchingLabel else "Refresh")
+                    Button(modifier = Modifier.width(128.dp).testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
+                        Text(
+                            text = if (isDiscovering) searchingLabel else "Refresh",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
                     }
                     Text(discoveryStatus, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 }

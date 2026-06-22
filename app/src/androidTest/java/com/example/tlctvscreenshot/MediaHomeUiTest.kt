@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -15,9 +16,11 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -76,6 +79,13 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
     }
 
+    private fun captureTestScreenshotAndWaitForCount(count: Int) {
+        composeRule.onNodeWithTag("action_capture_tv").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("gallery_item").fetchSemanticsNodes().size >= count
+        }
+    }
+
     @Test
     fun homeScreenRendersDarkMediaDashboardWidgets() {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
@@ -125,6 +135,7 @@ class MediaHomeUiTest {
         assertAnyTextDisplayed("Current Wi-Fi: Test Wi-Fi")
         assertAnyTextDisplayed("No TV selected.")
         composeRule.onNodeWithTag("wifi_settings_button").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("discover_button").assertWidthIsEqualTo(128.dp)
         composeRule.onNodeWithTag("connect_tv_icon", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("connect_tv_halo", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("manual_tv_ip").assertDoesNotExist()
@@ -146,22 +157,18 @@ class MediaHomeUiTest {
     }
 
     @Test
-    fun captureTileAddsGalleryItemAndGalleryActionsWork() {
+    fun captureTileAddsHorizontalGalleryItemAndGalleryActionsWork() {
         enableDebugActivityPane()
-        composeRule.onNodeWithTag("action_capture_tv").performClick()
-        composeRule.waitUntil(timeoutMillis = 5_000) {
-            composeRule.onAllNodesWithTag("gallery_item").fetchSemanticsNodes().isNotEmpty()
-        }
+        captureTestScreenshotAndWaitForCount(1)
         assertAnyTextDisplayed("Captured test TV screenshot.")
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
+        composeRule.onNodeWithTag("gallery_strip").assertIsDisplayed()
         composeRule.onAllNodesWithTag("gallery_item").assertCountEquals(1)
         composeRule.onNodeWithTag("gallery_item").assertIsDisplayed()
         assertAnyTextExists("TestCapture-", substring = true)
         composeRule.onNodeWithTag("selected_capture_preview").assertIsDisplayed()
 
-        composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_item_delete_button"))
-        composeRule.onNodeWithTag("gallery_item_open_button").assertIsDisplayed()
-            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithTag("gallery_item_preview").performSemanticsAction(SemanticsActions.OnClick)
         assertAnyTextExists("Opened TestCapture-", substring = true)
         composeRule.onNodeWithTag("selected_share_button").performScrollTo().assertIsDisplayed()
             .performSemanticsAction(SemanticsActions.OnClick)
@@ -180,6 +187,32 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("confirm_delete_button").performClick()
         assertAnyTextExists("Deleted TestCapture-", substring = true)
         composeRule.onAllNodesWithTag("gallery_item").assertCountEquals(0)
+    }
+
+    @Test
+    fun galleryPaneUsesVerticalListAndOpensCaptureForMainShare() {
+        enableDebugActivityPane()
+        repeat(3) { index ->
+            captureTestScreenshotAndWaitForCount(index + 1)
+        }
+        composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
+        composeRule.onNodeWithTag("gallery_strip").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("gallery_item").assertCountEquals(3)
+
+        composeRule.onNodeWithTag("gallery_open_pane_button").assertIsDisplayed().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("gallery_pane_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("gallery_pane_list").assertIsDisplayed()
+        assertTrue(composeRule.onAllNodesWithTag("gallery_pane_item").fetchSemanticsNodes().isNotEmpty())
+        composeRule.onNodeWithTag("gallery_pane_list").performScrollToIndex(2)
+        assertTrue(composeRule.onAllNodesWithTag("gallery_pane_item").fetchSemanticsNodes().isNotEmpty())
+
+        composeRule.onAllNodesWithTag("gallery_pane_item_open_button")[0].performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithTag("gallery_pane_dialog").assertDoesNotExist()
+        assertAnyTextExists("Opened TestCapture-", substring = true)
+        composeRule.onNodeWithTag("selected_capture_preview").assertIsDisplayed()
+        composeRule.onNodeWithTag("selected_share_button").performScrollTo().assertIsDisplayed()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        assertAnyTextExists("Test shared TestCapture-", substring = true)
     }
 
     @Test
