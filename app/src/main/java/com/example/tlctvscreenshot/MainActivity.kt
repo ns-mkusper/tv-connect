@@ -569,6 +569,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = settingsDrawerState,
+            gesturesEnabled = settingsDrawerState.isOpen,
             drawerContent = {
                 CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                     SettingsDrawer(
