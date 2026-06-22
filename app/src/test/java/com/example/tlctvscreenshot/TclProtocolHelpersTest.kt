@@ -14,6 +14,13 @@ import org.junit.Test
 class TclProtocolHelpersTest {
     private val helpers = Class.forName("com.example.tlctvscreenshot.MainActivityKt")
 
+    private data class RemoteButtonExpectation(
+        val label: String,
+        val keyCode: Int,
+        val displayLabel: String,
+        val testTag: String
+    )
+
     @Test
     fun discoveryPayloadEscapesPhoneNameAndParserRestoresTvName() {
         val payload = invoke("tclDiscoveryPayload", "Phone:One", "stable-id", 1) as String
@@ -71,6 +78,56 @@ class TclProtocolHelpersTest {
         val decrypted = invoke("decryptTclAes", raw) as ByteArray
 
         assertEquals(text, decrypted.toString(Charsets.UTF_8))
+    }
+
+
+    @Test
+    fun remoteButtonSpecsCoverEverySupportedButtonWithoutDrift() {
+        val specs = invoke("tclRemoteButtonSpecs") as List<*>
+        val expected = listOf(
+            RemoteButtonExpectation("Power", 20, "⏻", "remote_button_Power"),
+            RemoteButtonExpectation("Home", 19, "🏠", "remote_button_Home"),
+            RemoteButtonExpectation("Back", 16, "↩", "remote_button_Back"),
+            RemoteButtonExpectation("Up", 11, "⬆", "remote_button_Up"),
+            RemoteButtonExpectation("Left", 13, "⬅", "remote_button_Left"),
+            RemoteButtonExpectation("OK", 15, "OK", "remote_button_OK"),
+            RemoteButtonExpectation("Right", 14, "➡", "remote_button_Right"),
+            RemoteButtonExpectation("Down", 12, "⬇", "remote_button_Down"),
+            RemoteButtonExpectation("Vol -", 22, "🔉", "remote_button_Vol_minus"),
+            RemoteButtonExpectation("Mute", 23, "🔇", "remote_button_Mute"),
+            RemoteButtonExpectation("Vol +", 21, "🔊", "remote_button_Vol_plus"),
+            RemoteButtonExpectation("Menu", 18, "☰", "remote_button_Menu"),
+            RemoteButtonExpectation("Ch -", 28, "CH−", "remote_button_Ch_minus"),
+            RemoteButtonExpectation("Ch +", 27, "CH+", "remote_button_Ch_plus")
+        )
+
+        assertEquals(expected.size, specs.size)
+        expected.zip(specs).forEach { (expectedSpec, actualSpec) ->
+            assertEquals(expectedSpec.label, field(actualSpec ?: error("Missing spec"), "label"))
+            assertEquals(expectedSpec.keyCode, field(actualSpec, "keyCode"))
+            assertEquals(expectedSpec.displayLabel, field(actualSpec, "displayLabel"))
+            assertEquals(expectedSpec.testTag, field(actualSpec, "testTag"))
+        }
+        assertEquals(expected.size, specs.map { field(it ?: error("Missing spec"), "label") }.distinct().size)
+        assertEquals(expected.size, specs.map { field(it ?: error("Missing spec"), "testTag") }.distinct().size)
+    }
+
+    @Test
+    fun remoteButtonTagSanitizesLabelsForComposeTests() {
+        assertEquals("remote_button_Vol_minus", invoke("remoteButtonTag", "Vol -"))
+        assertEquals("remote_button_Vol_plus", invoke("remoteButtonTag", "Vol +"))
+        assertEquals("remote_button_Ch_minus", invoke("remoteButtonTag", "Ch -"))
+        assertEquals("remote_button_Ch_plus", invoke("remoteButtonTag", "Ch +"))
+    }
+
+    @Test
+    fun remoteKeyCommandsUseExpectedTclPayloads() {
+        val specs = invoke("tclRemoteButtonSpecs") as List<*>
+
+        specs.forEach { spec ->
+            val keyCode = field(spec ?: error("Missing spec"), "keyCode") as Int
+            assertEquals("149>>$keyCode", invoke("tclRemoteKeyCommand", keyCode))
+        }
     }
 
     @Test

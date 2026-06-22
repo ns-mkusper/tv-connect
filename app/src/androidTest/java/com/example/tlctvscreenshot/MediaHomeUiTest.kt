@@ -3,6 +3,7 @@ package com.example.tlctvscreenshot
 import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.semantics.SemanticsActions
@@ -40,6 +41,7 @@ class MediaHomeUiTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.getSharedPreferences("selected_tcl_device", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("tcl_6553_identity", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("app_settings", Context.MODE_PRIVATE).edit().clear().commit()
         File(context.filesDir, "TCast/Images").deleteRecursively()
 
         val intent = Intent(context, MainActivity::class.java)
@@ -65,6 +67,15 @@ class MediaHomeUiTest {
         assertTrue("No node found for text: $text", nodes.isNotEmpty())
     }
 
+    private fun enableDebugActivityPane() {
+        composeRule.onNodeWithTag("settings_menu_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("debug_mode_row").performClick()
+        composeRule.onNodeWithTag("settings_done_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
+    }
+
     @Test
     fun homeScreenRendersDarkMediaDashboardWidgets() {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
@@ -74,12 +85,13 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("action_cast_photo").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
-        composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed()
+        composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("bottom_remote_button").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("fast_capture_status").assertTextContains("Connect TV for fast capture")
-        assertAnyTextDisplayed("Please connect your TV......")
+        composeRule.onNodeWithTag("fast_capture_status", useUnmergedTree = true).assertTextContains("Connect TV for fast capture")
 
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
         composeRule.onNodeWithTag("gallery_section").assertIsDisplayed()
@@ -88,6 +100,20 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("gallery_tab_Videos").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_tab_Favorites").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_refresh_button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun settingsCanEnableDebugActivityPane() {
+        composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_menu_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        assertAnyTextDisplayed("Settings")
+        assertAnyTextDisplayed("Debug mode")
+        composeRule.onNodeWithTag("debug_mode_row").assertHasClickAction().performClick()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_done_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
     }
 
     @Test
@@ -114,6 +140,7 @@ class MediaHomeUiTest {
 
     @Test
     fun captureTileAddsGalleryItemAndGalleryActionsWork() {
+        enableDebugActivityPane()
         composeRule.onNodeWithTag("action_capture_tv").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithTag("gallery_item").fetchSemanticsNodes().isNotEmpty()
@@ -150,6 +177,7 @@ class MediaHomeUiTest {
 
     @Test
     fun mediaTilesAndGalleryTabsRespond() {
+        enableDebugActivityPane()
         composeRule.onNodeWithTag("action_cast_photo").performClick()
         assertAnyTextDisplayed("Photo casting is not required", substring = true)
         composeRule.onNodeWithTag("action_cast_video").performClick()
@@ -173,17 +201,42 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
 
+        composeRule.onNodeWithTag("top_status_area").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("connect_done_button").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("bottom_status_bar").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("connect_done_button").performClick()
+        composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
+
         composeRule.onNodeWithTag("bottom_remote_button").performClick()
         composeRule.onNodeWithTag("remote_dialog").assertIsDisplayed()
-        listOf("Power", "Home", "Back", "Up", "Left", "OK", "Right", "Down", "Vol -", "Mute", "Vol +", "Menu", "Ch -", "Ch +").forEach { label ->
-            assertAnyTextDisplayed(label)
+        val remoteButtons = listOf(
+            Triple("Power", "⏻", "remote_button_Power"),
+            Triple("Home", "🏠", "remote_button_Home"),
+            Triple("Back", "↩", "remote_button_Back"),
+            Triple("Up", "⬆", "remote_button_Up"),
+            Triple("Left", "⬅", "remote_button_Left"),
+            Triple("OK", "OK", "remote_button_OK"),
+            Triple("Right", "➡", "remote_button_Right"),
+            Triple("Down", "⬇", "remote_button_Down"),
+            Triple("Vol -", "🔉", "remote_button_Vol_minus"),
+            Triple("Mute", "🔇", "remote_button_Mute"),
+            Triple("Vol +", "🔊", "remote_button_Vol_plus"),
+            Triple("Menu", "☰", "remote_button_Menu"),
+            Triple("Ch -", "CH−", "remote_button_Ch_minus"),
+            Triple("Ch +", "CH+", "remote_button_Ch_plus")
+        )
+        remoteButtons.forEach { (_, displayLabel, tag) ->
+            assertAnyTextDisplayed(displayLabel)
+            composeRule.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled()
         }
-        composeRule.onNodeWithTag("remote_button_Up").performClick()
-        assertAnyTextDisplayed("Test remote sent Up.")
-        composeRule.onNodeWithTag("remote_button_OK").performClick()
-        assertAnyTextDisplayed("Test remote sent OK.")
-        composeRule.onNodeWithTag("remote_button_Back").performClick()
-        assertAnyTextDisplayed("Test remote sent Back.")
+        remoteButtons.forEach { (label, _, tag) ->
+            composeRule.onNodeWithTag(tag).performClick()
+            assertAnyTextDisplayed("Test remote sent $label.")
+        }
         composeRule.onNodeWithTag("remote_close_button").performClick()
         composeRule.onNodeWithTag("remote_dialog").assertDoesNotExist()
     }
