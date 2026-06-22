@@ -1089,7 +1089,7 @@ private fun GalleryPaneItem(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TextButton(modifier = Modifier.testTag("gallery_pane_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
                     TextButton(modifier = Modifier.testTag("gallery_pane_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_delete_button"), onClick = { onDelete(file) }) { Text("Delete") }
+                    TextButton(modifier = Modifier.testTag("gallery_pane_item_delete_button"), onClick = { onDelete(file) }) { Text("🗑️") }
                 }
             }
         }
