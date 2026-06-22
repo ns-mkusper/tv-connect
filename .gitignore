@@ -1,0 +1,8 @@
+
+# Android/Gradle build outputs
+.gradle/
+.kotlin/
+**/build/
+
+# Local reverse-engineering and validation captures
+captures/

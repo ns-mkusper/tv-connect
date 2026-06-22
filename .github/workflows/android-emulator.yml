@@ -1,0 +1,310 @@
+name: Android emulator UI tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_ui_tests:
+        description: 'Run UI tests and upload a screenshot'
+        required: true
+        default: true
+        type: boolean
+      run_screenshot_comparison:
+        description: 'Compare screenshots for a PR'
+        required: true
+        default: false
+        type: boolean
+      pr_number:
+        description: 'PR number to check'
+        required: false
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr_number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  emulator-ui-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    if: inputs.run_ui_tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build, lint, and run JVM tests
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
+
+      - name: Run Compose UI tests and capture screenshot
+        id: emulator_ui_tests
+        timeout-minutes: 18
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-boot-timeout: 480
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            set -eux
+            mkdir -p captures
+            adb wait-for-device
+            adb devices -l
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+            APK=app/build/outputs/apk/debug/app-debug.apk OUT=captures/compose-workbench-emulator.png bash scripts/ci_emulator_screenshot.sh
+
+      - name: Ensure screenshot artifact exists
+        if: always()
+        run: |
+          mkdir -p captures
+          if ! ls captures/*.png >/dev/null 2>&1; then
+            base64 -d > captures/emulator-unavailable.png <<'PNG'
+          iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lwQnWQAAAABJRU5ErkJggg==
+          PNG
+          fi
+
+      - name: Upload screenshot artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulator-screenshots
+          path: captures/*.png
+          if-no-files-found: error
+
+      - name: Upload instrumentation test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: connected-ui-test-results
+          path: app/build/outputs/androidTest-results/connected/**
+          if-no-files-found: ignore
+
+  android-emulator-screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    if: inputs.run_screenshot_comparison && inputs.pr_number != ''
+    env:
+      CI: "1"
+      JAVA_OPTS: "-Dsun.net.client.defaultConnectTimeout=60000 -Dsun.net.client.defaultReadTimeout=60000"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g -Dsun.net.client.defaultConnectTimeout=60000 -Dsun.net.client.defaultReadTimeout=60000"
+
+    steps:
+      - name: Resolve PR metadata
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
+          if [[ "${head_repo}" != "${REPO}" ]]; then
+            echo "Screenshot comparison only supports PRs from ${REPO}." >&2
+            exit 1
+          fi
+          echo "number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.head.sha' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(jq -r '.base.sha' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.pr.outputs.head_sha }}
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build head Android debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Create base worktree
+        run: |
+          set -euo pipefail
+          git worktree add ../tv-connect-base "${{ steps.pr.outputs.base_sha }}"
+          mkdir -p e2e-artifacts/apks
+          cp app/build/outputs/apk/debug/app-debug.apk e2e-artifacts/apks/head-app-debug.apk
+
+      - name: Build base Android debug APK
+        working-directory: ../tv-connect-base
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Free disk space before emulator capture
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-artifacts/apks
+          cp ../tv-connect-base/app/build/outputs/apk/debug/app-debug.apk e2e-artifacts/apks/base-app-debug.apk
+          echo "Disk usage before cleanup:"
+          df -h
+          du -sh app/build ../tv-connect-base/app/build ~/.gradle 2>/dev/null || true
+          rm -rf \
+            app/build \
+            ../tv-connect-base/app/build \
+            ~/.gradle/caches \
+            ~/.gradle/wrapper
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/share/boost \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL
+          docker image prune -af || true
+          echo "Disk usage after cleanup:"
+          df -h
+
+      - name: Install screenshot comparison dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-pil
+
+      - name: Capture before and after emulator screenshots
+        timeout-minutes: 20
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          emulator-boot-timeout: 480
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: |
+            bash -eo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/compose-workbench.png" LABEL="before" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            adb uninstall com.example.tlctvscreenshot || true
+            bash -eo pipefail -c 'APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/compose-workbench.png" LABEL="after" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"'
+
+      - name: Compare Android emulator screenshots
+        if: always()
+        run: |
+          if [[ -d e2e-artifacts/android-screenshots-before && -d e2e-artifacts/android-screenshots-after ]]; then
+            python3 scripts/compare_emulator_screenshots.py \
+              e2e-artifacts/android-screenshots-before \
+              e2e-artifacts/android-screenshots-after \
+              e2e-artifacts/android-screenshots-diff
+          fi
+
+      - name: Upload Android emulator screenshot comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-screenshot-comparison
+          path: |
+            e2e-artifacts/android-screenshots-before
+            e2e-artifacts/android-screenshots-after
+            e2e-artifacts/android-screenshots-diff
+          if-no-files-found: error
+
+      - name: Publish screenshots branch
+        id: publish
+        if: success() && hashFiles('e2e-artifacts/android-screenshots-after/*.png') != ''
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+          SOURCE_SHA="${{ steps.pr.outputs.head_sha }}"
+          SCREENSHOT_BRANCH="pr-${PR_NUMBER}-android-screenshots"
+          DEST_DIR="android-emulator-screenshots/${SOURCE_SHA}"
+          TMP_DIR="$(mktemp -d)"
+          mkdir -p "${TMP_DIR}/screenshots"
+          cp -R e2e-artifacts/android-screenshots-before "${TMP_DIR}/screenshots/before"
+          cp -R e2e-artifacts/android-screenshots-after "${TMP_DIR}/screenshots/after"
+          if [[ -d e2e-artifacts/android-screenshots-diff ]]; then
+            cp -R e2e-artifacts/android-screenshots-diff "${TMP_DIR}/screenshots/diff"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan "${SCREENSHOT_BRANCH}"
+          git rm -rf . >/dev/null 2>&1 || true
+          mkdir -p "${DEST_DIR}"
+          cp -R "${TMP_DIR}/screenshots"/* "${DEST_DIR}/"
+          git add "${DEST_DIR}"
+          git commit -m "Add Android emulator screenshots for PR #${PR_NUMBER}"
+          git push --force origin "HEAD:${SCREENSHOT_BRANCH}"
+
+          echo "branch=${SCREENSHOT_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "dir=${DEST_DIR}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment screenshots on PR
+        if: steps.publish.outputs.branch != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+          SCREENSHOT_BRANCH: ${{ steps.publish.outputs.branch }}
+          SCREENSHOT_DIR: ${{ steps.publish.outputs.dir }}
+          SOURCE_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          MARKER="<!-- tv-connect-android-emulator-screenshots-pr-${PR_NUMBER} -->"
+          RAW_BASE="https://raw.githubusercontent.com/${REPO}/${SCREENSHOT_BRANCH}/${SCREENSHOT_DIR}"
+          BODY_FILE="$(mktemp)"
+          {
+            printf '%s\n' "${MARKER}"
+            printf 'Android emulator before/after screenshots for commit `%s`:\n\n' "${SOURCE_SHA}"
+            printf '| Screen | Before | After | Diff |\n'
+            printf '| --- | --- | --- | --- |\n'
+
+            while IFS= read -r after_path; do
+              file="$(basename "$after_path")"
+              base="${file%.png}"
+              label="$(printf '%s' "$base" | sed -E 's/^[0-9]+-//; s/-/ /g; s/\b(.)/\u\1/g')"
+              before_cell="—"
+              diff_cell="—"
+              if [[ -f "e2e-artifacts/android-screenshots-before/${file}" ]]; then
+                before_cell="![${label} before](${RAW_BASE}/before/${file})"
+              fi
+              if [[ -f "e2e-artifacts/android-screenshots-diff/${base}.diff.png" ]]; then
+                diff_cell="![${label} diff](${RAW_BASE}/diff/${base}.diff.png)"
+              fi
+              printf '| %s | %s | ![%s after](%s/after/%s) | %s |\n' \
+                "$label" \
+                "$before_cell" \
+                "$label" \
+                "$RAW_BASE" \
+                "$file" \
+                "$diff_cell"
+            done < <(find e2e-artifacts/android-screenshots-after -maxdepth 1 -type f -name '*.png' | sort)
+          } > "$BODY_FILE"
+
+          COMMENT_ID="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" --paginate --jq ".[] | select(.body | contains(\"${MARKER}\")) | .id" | tail -n 1)"
+          BODY="$(cat "$BODY_FILE")"
+          if [[ -n "$COMMENT_ID" ]]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${COMMENT_ID}" -f body="$BODY" >/dev/null
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR_NUMBER}/comments" -f body="$BODY" >/dev/null
+          fi
