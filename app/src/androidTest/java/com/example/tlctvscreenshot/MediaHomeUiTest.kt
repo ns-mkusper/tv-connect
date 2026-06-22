@@ -125,6 +125,8 @@ class MediaHomeUiTest {
         assertAnyTextDisplayed("Current Wi-Fi: Test Wi-Fi")
         assertAnyTextDisplayed("No TV selected.")
         composeRule.onNodeWithTag("wifi_settings_button").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("connect_tv_icon", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("connect_tv_halo", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithTag("manual_tv_ip").assertDoesNotExist()
 
         composeRule.waitUntil(timeoutMillis = 5_000) {

@@ -16,6 +16,11 @@ import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,6 +37,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -58,6 +64,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -1005,6 +1012,56 @@ private fun BottomMediaBar(
 }
 
 @Composable
+private fun rememberSearchingLabel(isSearching: Boolean): String {
+    var dotCount by remember { mutableStateOf(1) }
+    LaunchedEffect(isSearching) {
+        dotCount = 1
+        while (isSearching) {
+            delay(450)
+            dotCount = if (dotCount >= 3) 1 else dotCount + 1
+        }
+    }
+    return if (isSearching) "Searching${".".repeat(dotCount)}" else "Refresh"
+}
+
+@Composable
+private fun SearchingTvIcon(isSearching: Boolean) {
+    val haloProgress = if (isSearching) {
+        val transition = rememberInfiniteTransition(label = "connect-search")
+        val progress by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_200),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "connect-search-halo"
+        )
+        progress
+    } else {
+        0f
+    }
+    val haloSize = if (isSearching) 48.dp + (24 * haloProgress).dp else 54.dp
+    val haloAlpha = if (isSearching) (0.36f * (1f - haloProgress)).coerceIn(0.08f, 0.36f) else 0.16f
+
+    Box(
+        modifier = Modifier.size(76.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            modifier = Modifier
+                .size(haloSize)
+                .alpha(haloAlpha)
+                .testTag("connect_tv_halo"),
+            shape = CircleShape,
+            color = AccentColor,
+            content = {}
+        )
+        Text("▭", fontSize = 44.sp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
+    }
+}
+
+@Composable
 private fun ConnectTvDialog(
     selectedDevice: SelectedTclDevice?,
     tvIp: String,
@@ -1040,13 +1097,14 @@ private fun ConnectTvDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                val searchingLabel = rememberSearchingLabel(isDiscovering)
                 Card(colors = CardDefaults.cardColors(containerColor = AccentColor.copy(alpha = 0.18f))) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("▭", fontSize = 44.sp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
+                        SearchingTvIcon(isSearching = isDiscovering)
                         Text("Choose a device on this Wi-Fi", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                         TextButton(modifier = Modifier.testTag("wifi_settings_button"), onClick = onOpenWifiSettings) {
                             Text("Current Wi-Fi: $currentWifiName")
@@ -1065,7 +1123,7 @@ private fun ConnectTvDialog(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Button(modifier = Modifier.testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
-                        Text(if (isDiscovering) "Searching..." else "Refresh")
+                        Text(if (isDiscovering) searchingLabel else "Refresh")
                     }
                     Text(discoveryStatus, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 }
