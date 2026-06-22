@@ -117,22 +117,27 @@ class MediaHomeUiTest {
     }
 
     @Test
-    fun connectDialogSupportsDiscoveryManualEntryIdentityAndDismiss() {
+    fun connectDialogDiscoversImmediatelyAndConnectsFromDeviceCard() {
         composeRule.onNodeWithTag("top_tv_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
         assertAnyTextDisplayed("Connect TV")
+        assertAnyTextDisplayed("Choose a device on this Wi-Fi")
+        assertAnyTextDisplayed("Current Wi-Fi: Test Wi-Fi")
         assertAnyTextDisplayed("No TV selected.")
-        composeRule.onNodeWithTag("manual_tv_ip").performTextReplacement("192.0.2.55")
-        composeRule.onNodeWithTag("manual_tv_ip").assertTextContains("192.0.2.55")
-        composeRule.onNodeWithTag("phone_name_field").performTextReplacement("Compose Test Phone")
-        composeRule.onNodeWithTag("phone_name_field").assertTextContains("Compose Test Phone")
-        composeRule.onNodeWithTag("use_android_id_button").performClick()
+        composeRule.onNodeWithTag("wifi_settings_button").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("manual_tv_ip").assertDoesNotExist()
 
-        composeRule.onNodeWithTag("discover_button").performClick()
-        composeRule.onNodeWithTag("discovered_device_card").assertIsDisplayed()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("discovered_device_card").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("discovered_device_card").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("device_type_icon", useUnmergedTree = true).assertExists()
         assertAnyTextDisplayed("Test Living Room TV — 192.0.2.10")
-        composeRule.onNodeWithTag("use_discovered_device_button").performClick()
+        assertAnyTextExists("Tap to connect", substring = true)
+        composeRule.onNodeWithTag("discovered_device_card").performClick()
         assertAnyTextExists("Selected: Test Living Room TV — 192.0.2.10")
+        assertAnyTextExists("Connected to Test Living Room TV.")
+        assertAnyTextExists("Connected")
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
         assertAnyTextExists("TV connected — fallback capture only")

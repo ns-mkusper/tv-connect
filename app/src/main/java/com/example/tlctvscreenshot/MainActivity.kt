@@ -262,8 +262,9 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var isCapturingTcl by remember { mutableStateOf(false) }
     var activeRemoteSends by remember { mutableStateOf(0) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
-    var discoveryStatus by remember { mutableStateOf("Open discovery to find and connect to a TV.") }
+    var discoveryStatus by remember { mutableStateOf("Open Connect TV to search for nearby devices.") }
     var isDiscovering by remember { mutableStateOf(false) }
+    var currentWifiName by remember { mutableStateOf(if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
     var selectedScreenshot by remember { mutableStateOf(screenshots.firstOrNull()) }
     var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { BitmapFactory.decodeFile(it.absolutePath) }) }
@@ -323,12 +324,12 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     fun startDiscovery() {
         isDiscovering = true
         discoveredDevices = emptyList()
-        discoveryStatus = "Discovering TVs on the local network..."
+        currentWifiName = if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)
+        discoveryStatus = "Searching for nearby TVs on the current Wi-Fi..."
         if (testMode) {
             val testDevice = testTclDevice()
             discoveredDevices = listOf(testDevice)
-            rememberSelectedDevice(testDevice)
-            discoveryStatus = "Found 1 test TV candidate. The test TV was selected and remembered."
+            discoveryStatus = "Found 1 TV candidate. Select it to connect."
             isDiscovering = false
             return
         }
@@ -342,16 +343,22 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                 )
             }.onSuccess { devices ->
                 discoveredDevices = devices
-                devices.firstOrNull()?.let(::rememberSelectedDevice)
                 discoveryStatus = if (devices.isEmpty()) {
-                    "No TVs found. Confirm the phone and TV are on the same Wi-Fi subnet, or enter the TV IP manually."
+                    "No TVs found. Check that the phone and TV are on the same Wi-Fi, then refresh."
                 } else {
-                    "Found ${devices.size} TV candidate(s). The first one was selected and remembered."
+                    "Found ${devices.size} TV candidate(s). Select one to connect."
                 }
             }.onFailure { error ->
                 discoveryStatus = "Discovery failed: ${error.message ?: error::class.java.simpleName}"
             }
             isDiscovering = false
+        }
+    }
+
+    fun openConnectDialog() {
+        showConnectDialog = true
+        if (!isDiscovering) {
+            startDiscovery()
         }
     }
 
@@ -378,7 +385,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         val ip = currentTvIp().trim()
         if (ip.isBlank()) {
             tclStatus = "Please connect your TV first."
-            showConnectDialog = true
+            openConnectDialog()
             return
         }
         isCapturingTcl = true
@@ -438,7 +445,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         val ip = currentTvIp().trim()
         if (ip.isBlank()) {
             remoteStatus = "Please connect your TV first."
-            showConnectDialog = true
+            openConnectDialog()
             return
         }
         activeRemoteSends += 1
@@ -509,8 +516,18 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             tclPhoneImei = tclPhoneImei,
             onTclPhoneImeiChange = { tclPhoneImei = it },
             onUseAndroidId = { tclUuid = androidId.ifBlank { "android-id-unavailable" } },
+            currentWifiName = currentWifiName,
+            debugModeEnabled = debugModeEnabled,
+            onOpenWifiSettings = {
+                if (!testMode) {
+                    context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            },
             onDiscover = { startDiscovery() },
-            onUseDevice = { rememberSelectedDevice(it) },
+            onUseDevice = { device ->
+                rememberSelectedDevice(device)
+                discoveryStatus = "Connected to ${device.name.ifBlank { "TV" }}."
+            },
             onForget = {
                 forgetSelectedTclDevice(context)
                 selectedDevice = null
@@ -557,7 +574,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             MediaHomeHeader(
                 selectedDevice = selectedDevice,
                 fastCaptureStatus = fastCaptureUiStatus,
-                onConnectClick = { showConnectDialog = true },
+                onConnectClick = { openConnectDialog() },
                 onSettingsClick = { showSettingsDialog = true }
             )
 
@@ -645,7 +662,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
         BottomMediaBar(
             fastCaptureStatus = fastCaptureUiStatus,
-            onConnectClick = { showConnectDialog = true },
+            onConnectClick = { openConnectDialog() },
             onRemoteClick = { showRemoteDialog = true },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
@@ -1002,6 +1019,9 @@ private fun ConnectTvDialog(
     tclPhoneImei: String,
     onTclPhoneImeiChange: (String) -> Unit,
     onUseAndroidId: () -> Unit,
+    currentWifiName: String,
+    debugModeEnabled: Boolean,
+    onOpenWifiSettings: () -> Unit,
     onDiscover: () -> Unit,
     onUseDevice: (TclDiscoveryDevice) -> Unit,
     onForget: () -> Unit,
@@ -1020,66 +1040,107 @@ private fun ConnectTvDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Card(colors = CardDefaults.cardColors(containerColor = AccentColor.copy(alpha = 0.18f))) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("▭", fontSize = 44.sp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
+                        Text("Choose a device on this Wi-Fi", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                        TextButton(modifier = Modifier.testTag("wifi_settings_button"), onClick = onOpenWifiSettings) {
+                            Text("Current Wi-Fi: $currentWifiName")
+                        }
+                    }
+                }
+
                 selectedDevice?.let { current ->
                     Text("Selected: ${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
                     Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}", style = MaterialTheme.typography.bodySmall)
                 } ?: Text("No TV selected.", color = AccentColor, fontWeight = FontWeight.Bold)
-                Button(modifier = Modifier.testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
-                    Text(if (isDiscovering) "Discovering..." else "Discover TV")
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(modifier = Modifier.testTag("discover_button"), enabled = !isDiscovering, onClick = onDiscover) {
+                        Text(if (isDiscovering) "Searching..." else "Refresh")
+                    }
+                    Text(discoveryStatus, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 }
-                Text(discoveryStatus, style = MaterialTheme.typography.bodySmall)
+
+                if (discoveredDevices.isEmpty() && !isDiscovering) {
+                    Text("No devices listed yet. Refresh after checking Wi-Fi.", style = MaterialTheme.typography.bodySmall)
+                }
+
                 discoveredDevices.forEach { device ->
+                    val isSelected = selectedDevice?.ip == device.ip
                     Card(
-                        modifier = Modifier.testTag("discovered_device_card"),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        onClick = { onUseDevice(device) },
+                        modifier = Modifier.fillMaxWidth().testTag("discovered_device_card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSelected) AccentColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant
+                        )
                     ) {
-                        Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
-                            Text(
-                                listOfNotNull(
-                                    "source=${device.source}",
-                                    device.mac?.let { "mac=$it" },
-                                    device.algorithmType?.let { "algorithm=$it" }
-                                ).joinToString("  "),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            device.handshake?.let { handshake ->
-                                Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(deviceTypeIcon(device.deviceType), fontSize = 28.sp, modifier = Modifier.testTag("device_type_icon"))
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
+                                Text(
+                                    listOfNotNull(
+                                        device.deviceType.ifBlank { "TV" },
+                                        if (isSelected) "Connected" else "Tap to connect",
+                                        device.algorithmType?.let { "Verified" }
+                                    ).joinToString(" • "),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
-                            Button(modifier = Modifier.testTag("use_discovered_device_button"), onClick = { onUseDevice(device) }) { Text("Use ${device.ip}") }
+                            Text(if (isSelected) "Connected" else "Connect", color = AccentColor, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
-                OutlinedTextField(
-                    value = tvIp,
-                    onValueChange = onTvIpChange,
-                    label = { Text("Manual TV IP") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("manual_tv_ip")
-                )
-                Text("Advanced identity", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = tclPhoneName,
-                    onValueChange = onTclPhoneNameChange,
-                    label = { Text("Phone name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("phone_name_field")
-                )
-                OutlinedTextField(
-                    value = tclUuid,
-                    onValueChange = onTclUuidChange,
-                    label = { Text("Handshake UUID") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("handshake_uuid_field")
-                )
-                OutlinedTextField(
-                    value = tclPhoneImei,
-                    onValueChange = onTclPhoneImeiChange,
-                    label = { Text("Stable phone ID") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("stable_phone_id_field")
-                )
-                TextButton(modifier = Modifier.testTag("use_android_id_button"), onClick = onUseAndroidId) { Text("Use this app's Android ID") }
+
+                if (debugModeEnabled) {
+                    Text("Debug connection fallback", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = tvIp,
+                        onValueChange = onTvIpChange,
+                        label = { Text("Manual TV IP") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("manual_tv_ip")
+                    )
+                    Text("Advanced identity", style = MaterialTheme.typography.titleMedium)
+                    OutlinedTextField(
+                        value = tclPhoneName,
+                        onValueChange = onTclPhoneNameChange,
+                        label = { Text("Phone name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("phone_name_field")
+                    )
+                    OutlinedTextField(
+                        value = tclUuid,
+                        onValueChange = onTclUuidChange,
+                        label = { Text("Handshake UUID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("handshake_uuid_field")
+                    )
+                    OutlinedTextField(
+                        value = tclPhoneImei,
+                        onValueChange = onTclPhoneImeiChange,
+                        label = { Text("Stable phone ID") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("stable_phone_id_field")
+                    )
+                    TextButton(modifier = Modifier.testTag("use_android_id_button"), onClick = onUseAndroidId) { Text("Use this app's Android ID") }
+                    selectedDevice?.handshake?.let { handshake ->
+                        Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
             }
         }
     )
@@ -1282,6 +1343,7 @@ private fun fastCaptureUiStatus(connected: Boolean, state: Tcl6553SessionState):
 private fun testTclDevice(): TclDiscoveryDevice = TclDiscoveryDevice(
     ip = "192.0.2.10",
     name = "Test Living Room TV",
+    deviceType = "TV",
     source = "ui-test",
     mac = "00:11:22:33:44:55",
     algorithmType = "1",
@@ -1323,6 +1385,7 @@ private data class TclPacket(
 private data class TclDiscoveryDevice(
     val ip: String,
     val name: String,
+    val deviceType: String = "TV",
     val source: String,
     val mac: String? = null,
     val algorithmType: String? = null,
@@ -1445,6 +1508,21 @@ private fun formatTimestamp(millis: Long): String {
     return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM).format(Date(millis))
 }
 
+private fun currentWifiDisplayName(context: Context): String {
+    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+    return wifiManager?.connectionInfo?.ssid
+        ?.removeSurrounding("\"")
+        ?.takeUnless { it.isBlank() || it == "<unknown ssid>" }
+        ?: "Check Wi-Fi"
+}
+
+private fun deviceTypeIcon(deviceType: String): String = when (deviceType.trim().uppercase()) {
+    "TV", "TCL TV" -> "▭"
+    "SPEAKER", "AUDIO" -> "♪"
+    "PHONE" -> "▯"
+    else -> "•"
+}
+
 private fun formatFileSize(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
@@ -1522,6 +1600,7 @@ private suspend fun discoverTclTvs(
                     devices[sourceIp] = TclDiscoveryDevice(
                         ip = sourceIp,
                         name = parsed.senderName,
+                        deviceType = parsed.senderType.ifBlank { "TV" },
                         source = "udp:${parsed.commandNo}",
                         mac = mac
                     )
