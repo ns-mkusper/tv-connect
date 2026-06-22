@@ -98,8 +98,10 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.ArrayDeque
 import java.text.DateFormat
+import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorCompletionService
@@ -246,7 +248,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     val context = LocalContext.current
     SideEffect { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
-    val screenshotDirectory = remember { File(context.filesDir, "TCast/Images") }
+    val screenshotDirectory = remember { screenshotDirectory(context) }
     val tclSessionManager = remember { Tcl6553SessionManager() }
     val fastCaptureState by tclSessionManager.state.collectAsState()
     DisposableEffect(Unit) {
@@ -1625,7 +1627,7 @@ private fun TclDiscoveryDevice.toSelectedDevice(verifiedAtMillis: Long = System.
 }
 
 private fun loadScreenshotFiles(context: Context): List<File> {
-    val directory = File(context.filesDir, "TCast/Images")
+    val directory = screenshotDirectory(context)
     return directory.listFiles()
         ?.filter { file -> file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "bin") }
         ?.sortedByDescending { it.lastModified() }
@@ -1677,6 +1679,28 @@ private fun imageMimeType(file: File): String = when (file.extension.lowercase()
     "jpg", "jpeg" -> "image/jpeg"
     "png" -> "image/png"
     else -> "application/octet-stream"
+}
+
+private fun screenshotDirectory(context: Context): File = File(context.filesDir, "Screenshots")
+
+private fun captureFilename(nowMillis: Long, extension: String): String {
+    val safeExtension = extension.lowercase().ifBlank { "bin" }
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    return "tcl-tv-screenshot_$timestamp.$safeExtension"
+}
+
+private fun uniqueCaptureFile(directory: File, nowMillis: Long, extension: String): File {
+    val first = File(directory, captureFilename(nowMillis, extension))
+    if (!first.exists()) return first
+
+    val safeExtension = extension.lowercase().ifBlank { "bin" }
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    var suffix = 2
+    while (true) {
+        val candidate = File(directory, "tcl-tv-screenshot_${timestamp}_$suffix.$safeExtension")
+        if (!candidate.exists()) return candidate
+        suffix++
+    }
 }
 
 private fun formatTimestamp(millis: Long): String {
@@ -2340,7 +2364,11 @@ private fun saveTclScreenshotResult(
         ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
 
     imageDirectory.mkdirs()
-    val file = File(imageDirectory, "TCast6553-${System.currentTimeMillis()}.${imageExtension(imageBytes)}")
+    val file = uniqueCaptureFile(
+        directory = imageDirectory,
+        nowMillis = System.currentTimeMillis(),
+        extension = imageExtension(imageBytes)
+    )
     file.writeBytes(imageBytes)
 
     trace?.mark("Decode and save")

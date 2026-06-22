@@ -45,7 +45,7 @@ class MediaHomeUiTest {
         context.getSharedPreferences("selected_tcl_device", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("tcl_6553_identity", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("app_settings", Context.MODE_PRIVATE).edit().clear().commit()
-        File(context.filesDir, "TCast/Images").deleteRecursively()
+        File(context.filesDir, "Screenshots").deleteRecursively()
 
         val intent = Intent(context, MainActivity::class.java)
             .putExtra("com.example.tlctvscreenshot.UI_TEST_MODE", true)
