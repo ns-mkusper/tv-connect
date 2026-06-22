@@ -85,6 +85,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -603,35 +604,34 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             MediaActionTile(
                                 title = "Capture TV",
                                 subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
                                 enabled = !isCapturingTcl,
+                                compact = true,
                                 modifier = Modifier.weight(1f).testTag("action_capture_tv"),
                                 onClick = { captureTv() }
                             )
                             MediaActionTile(
                                 title = "Cast Photo",
                                 subtitle = "Gallery",
+                                compact = true,
                                 modifier = Modifier.weight(1f).testTag("action_cast_photo"),
                                 onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
                             )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
                             MediaActionTile(
                                 title = "Cast Video",
                                 subtitle = "Media",
+                                compact = true,
                                 modifier = Modifier.weight(1f).testTag("action_cast_video"),
                                 onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
                             )
                             MediaActionTile(
                                 title = "Cast Music",
                                 subtitle = "Audio",
+                                compact = true,
                                 modifier = Modifier.weight(1f).testTag("action_cast_music"),
                                 onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
                             )
@@ -763,33 +763,53 @@ private fun MediaActionTile(
     title: String,
     subtitle: String,
     enabled: Boolean = true,
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val tileHeight = if (compact) 92.dp else 112.dp
+    val tilePadding = if (compact) 10.dp else 14.dp
+    val iconSize = if (compact) 28.dp else 34.dp
+    val iconCornerRadius = if (compact) 10.dp else 12.dp
+    val titleFontSize = if (compact) 12.sp else 14.sp
+    val subtitleFontSize = if (compact) 10.sp else 12.sp
+
     Card(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.height(112.dp),
+        modifier = modifier.height(tileHeight),
         colors = CardDefaults.cardColors(containerColor = PanelColor),
         shape = RoundedCornerShape(20.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(14.dp),
+                .padding(tilePadding),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
-                    .background(AccentColor.copy(alpha = 0.18f), RoundedCornerShape(12.dp)),
+                    .size(iconSize)
+                    .background(AccentColor.copy(alpha = 0.18f), RoundedCornerShape(iconCornerRadius)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(title.take(1), color = AccentColor, fontWeight = FontWeight.Bold)
+                Text(title.take(1), color = AccentColor, fontWeight = FontWeight.Bold, fontSize = titleFontSize)
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title, fontWeight = FontWeight.Bold)
-                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedText)
+                Text(
+                    title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = titleFontSize,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    subtitle,
+                    fontSize = subtitleFontSize,
+                    color = MutedText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
