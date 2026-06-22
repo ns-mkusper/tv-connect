@@ -174,10 +174,6 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("selected_share_button").performScrollTo().assertIsDisplayed()
             .performSemanticsAction(SemanticsActions.OnClick)
         assertAnyTextExists("Test shared TestCapture-", substring = true)
-        composeRule.onNodeWithTag("selected_export_button").performScrollTo().assertIsDisplayed()
-            .performSemanticsAction(SemanticsActions.OnClick)
-        assertAnyTextExists("Test exported TestCapture-", substring = true)
-
         composeRule.onNodeWithTag("selected_delete_button").performScrollTo().assertIsDisplayed()
             .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithTag("delete_capture_dialog").assertIsDisplayed()

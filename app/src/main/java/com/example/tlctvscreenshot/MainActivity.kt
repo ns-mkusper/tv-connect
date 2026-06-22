@@ -290,7 +290,6 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             if (screenshots.isEmpty()) "No saved captures yet." else "Loaded ${screenshots.size} saved capture(s)."
         )
     }
-    var isExporting by remember { mutableStateOf(false) }
     val appSettings = remember(context) { context.getSharedPreferences("app_settings", Context.MODE_PRIVATE) }
     var debugModeEnabled by remember { mutableStateOf(appSettings.getBoolean("debug_mode_enabled", false)) }
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
@@ -647,7 +646,6 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     screenshots = screenshots,
                     selectedScreenshot = selectedScreenshot,
                     galleryBitmap = galleryBitmap,
-                    isExporting = isExporting,
                     onRefresh = { refreshGallery() },
                     onOpen = { file ->
                         selectedScreenshot = file
@@ -659,20 +657,6 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             galleryStatus = "Test shared ${file.name}."
                         } else {
                             shareScreenshot(context, file)
-                        }
-                    },
-                    onExport = { file ->
-                        if (testMode) {
-                            galleryStatus = "Test exported ${file.name}."
-                        } else {
-                            isExporting = true
-                            galleryStatus = "Exporting ${file.name} to Pictures..."
-                            coroutineScope.launch {
-                                runCatching { exportScreenshotToPictures(context, file) }
-                                    .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
-                                    .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
-                                isExporting = false
-                            }
                         }
                     },
                     onDelete = { file -> deleteCandidate = file }
@@ -856,11 +840,9 @@ private fun GallerySection(
     screenshots: List<File>,
     selectedScreenshot: File?,
     galleryBitmap: Bitmap?,
-    isExporting: Boolean,
     onRefresh: () -> Unit,
     onOpen: (File) -> Unit,
     onShare: (File) -> Unit,
-    onExport: (File) -> Unit,
     onDelete: (File) -> Unit
 ) {
     val tabs = listOf("All", "Photos", "Videos", "Favorites")
@@ -914,9 +896,6 @@ private fun GallerySection(
             if (selectedScreenshot != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(modifier = Modifier.testTag("selected_share_button"), onClick = { onShare(selectedScreenshot) }) { Text("Share") }
-                    Button(modifier = Modifier.testTag("selected_export_button"), enabled = !isExporting, onClick = { onExport(selectedScreenshot) }) {
-                        Text(if (isExporting) "Exporting" else "Export")
-                    }
                     Button(modifier = Modifier.testTag("selected_delete_button"), onClick = { onDelete(selectedScreenshot) }) { Text("Delete") }
                 }
             }
