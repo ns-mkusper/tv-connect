@@ -176,26 +176,26 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("bottom_remote_button").performClick()
         composeRule.onNodeWithTag("remote_dialog").assertIsDisplayed()
         val remoteButtons = listOf(
-            "Power" to "remote_button_Power",
-            "Home" to "remote_button_Home",
-            "Back" to "remote_button_Back",
-            "Up" to "remote_button_Up",
-            "Left" to "remote_button_Left",
-            "OK" to "remote_button_OK",
-            "Right" to "remote_button_Right",
-            "Down" to "remote_button_Down",
-            "Vol -" to "remote_button_Vol_minus",
-            "Mute" to "remote_button_Mute",
-            "Vol +" to "remote_button_Vol_plus",
-            "Menu" to "remote_button_Menu",
-            "Ch -" to "remote_button_Ch_minus",
-            "Ch +" to "remote_button_Ch_plus"
+            Triple("Power", "⏻", "remote_button_Power"),
+            Triple("Home", "🏠", "remote_button_Home"),
+            Triple("Back", "↩", "remote_button_Back"),
+            Triple("Up", "⬆", "remote_button_Up"),
+            Triple("Left", "⬅", "remote_button_Left"),
+            Triple("OK", "OK", "remote_button_OK"),
+            Triple("Right", "➡", "remote_button_Right"),
+            Triple("Down", "⬇", "remote_button_Down"),
+            Triple("Vol -", "🔉", "remote_button_Vol_minus"),
+            Triple("Mute", "🔇", "remote_button_Mute"),
+            Triple("Vol +", "🔊", "remote_button_Vol_plus"),
+            Triple("Menu", "☰", "remote_button_Menu"),
+            Triple("Ch -", "CH−", "remote_button_Ch_minus"),
+            Triple("Ch +", "CH+", "remote_button_Ch_plus")
         )
-        remoteButtons.forEach { (label, tag) ->
-            assertAnyTextDisplayed(label)
+        remoteButtons.forEach { (_, displayLabel, tag) ->
+            assertAnyTextDisplayed(displayLabel)
             composeRule.onNodeWithTag(tag).assertIsDisplayed().assertIsEnabled()
         }
-        remoteButtons.forEach { (label, tag) ->
+        remoteButtons.forEach { (label, _, tag) ->
             composeRule.onNodeWithTag(tag).performClick()
             assertAnyTextDisplayed("Test remote sent $label.")
         }

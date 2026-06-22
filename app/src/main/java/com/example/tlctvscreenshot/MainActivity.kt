@@ -62,11 +62,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -155,24 +158,25 @@ private const val TCL_KEY_CHANNEL_DOWN = 28
 private data class TclRemoteButtonSpec(
     val label: String,
     val keyCode: Int,
+    val displayLabel: String,
     val testTag: String = remoteButtonTag(label)
 )
 
 private val TCL_REMOTE_BUTTONS = listOf(
-    TclRemoteButtonSpec("Power", TCL_KEY_POWER),
-    TclRemoteButtonSpec("Home", TCL_KEY_HOME),
-    TclRemoteButtonSpec("Back", TCL_KEY_BACK),
-    TclRemoteButtonSpec("Up", TCL_KEY_UP),
-    TclRemoteButtonSpec("Left", TCL_KEY_LEFT),
-    TclRemoteButtonSpec("OK", TCL_KEY_OK),
-    TclRemoteButtonSpec("Right", TCL_KEY_RIGHT),
-    TclRemoteButtonSpec("Down", TCL_KEY_DOWN),
-    TclRemoteButtonSpec("Vol -", TCL_KEY_VOLUME_DOWN),
-    TclRemoteButtonSpec("Mute", TCL_KEY_MUTE),
-    TclRemoteButtonSpec("Vol +", TCL_KEY_VOLUME_UP),
-    TclRemoteButtonSpec("Menu", TCL_KEY_MENU),
-    TclRemoteButtonSpec("Ch -", TCL_KEY_CHANNEL_DOWN),
-    TclRemoteButtonSpec("Ch +", TCL_KEY_CHANNEL_UP)
+    TclRemoteButtonSpec("Power", TCL_KEY_POWER, "⏻"),
+    TclRemoteButtonSpec("Home", TCL_KEY_HOME, "🏠"),
+    TclRemoteButtonSpec("Back", TCL_KEY_BACK, "↩"),
+    TclRemoteButtonSpec("Up", TCL_KEY_UP, "⬆"),
+    TclRemoteButtonSpec("Left", TCL_KEY_LEFT, "⬅"),
+    TclRemoteButtonSpec("OK", TCL_KEY_OK, "OK"),
+    TclRemoteButtonSpec("Right", TCL_KEY_RIGHT, "➡"),
+    TclRemoteButtonSpec("Down", TCL_KEY_DOWN, "⬇"),
+    TclRemoteButtonSpec("Vol -", TCL_KEY_VOLUME_DOWN, "🔉"),
+    TclRemoteButtonSpec("Mute", TCL_KEY_MUTE, "🔇"),
+    TclRemoteButtonSpec("Vol +", TCL_KEY_VOLUME_UP, "🔊"),
+    TclRemoteButtonSpec("Menu", TCL_KEY_MENU, "☰"),
+    TclRemoteButtonSpec("Ch -", TCL_KEY_CHANNEL_DOWN, "CH−"),
+    TclRemoteButtonSpec("Ch +", TCL_KEY_CHANNEL_UP, "CH+")
 )
 
 private fun tclRemoteButtonSpecs(): List<TclRemoteButtonSpec> = TCL_REMOTE_BUTTONS
@@ -1047,30 +1051,48 @@ private fun RemoteControlDialog(
         title = { Text("Remote") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                ) {
                     TCL_REMOTE_POWER_ROW.forEach { spec ->
                         RemoteButton(spec, onSendRemoteButton)
                     }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                    ) {
                         RemoteButton(tclRemoteButton("Up"), onSendRemoteButton)
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                    ) {
                         TCL_REMOTE_DPAD_CENTER_ROW.forEach { spec ->
                             RemoteButton(spec, onSendRemoteButton)
                         }
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                    ) {
                         RemoteButton(tclRemoteButton("Down"), onSendRemoteButton)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                ) {
                     TCL_REMOTE_VOLUME_ROW.forEach { spec ->
                         RemoteButton(spec, onSendRemoteButton)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                ) {
                     TCL_REMOTE_CHANNEL_ROW.forEach { spec ->
                         RemoteButton(spec, onSendRemoteButton)
                     }
@@ -1089,16 +1111,33 @@ private fun RemoteButton(
     Button(
         enabled = true,
         onClick = { onClick(spec.label, spec.keyCode) },
-        modifier = Modifier.width(82.dp).testTag(spec.testTag),
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = PanelColor)
+        modifier = Modifier
+            .width(86.dp)
+            .height(58.dp)
+            .semantics { contentDescription = "${spec.label} remote button" }
+            .testTag(spec.testTag),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = RemoteButtonColor,
+            contentColor = RemoteButtonContentColor
+        )
     ) {
-        Text(spec.label, maxLines = 1)
+        Text(
+            spec.displayLabel,
+            modifier = Modifier.fillMaxWidth(),
+            maxLines = 1,
+            color = RemoteButtonContentColor,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.ExtraBold,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
 private val AppBackground = Color(0xFF0B0F18)
 private val PanelColor = Color(0xFF171D2A)
+private val RemoteButtonColor = Color(0xFFFFF3B0)
+private val RemoteButtonContentColor = Color(0xFF05070D)
 private val MutedText = Color(0xFFA9B0C2)
 private val AccentColor = Color(0xFFE6426E)
 private val SuccessColor = Color(0xFF2DAF7D)
