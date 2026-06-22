@@ -2,6 +2,7 @@ package com.example.tlctvscreenshot
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHeightIsEqualTo
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -111,6 +113,22 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("gallery_tab_Videos").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_tab_Favorites").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_refresh_button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun leftEdgeTouchOnCaptureTileDoesNotOpenSettingsDrawer() {
+        composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
+
+        composeRule.onNodeWithTag("action_capture_tv").performTouchInput {
+            down(Offset(1f, 1f))
+            moveBy(Offset(80f, 0f))
+            up()
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
+
+        composeRule.onNodeWithTag("action_capture_tv").assertIsDisplayed().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
     }
 
     @Test
