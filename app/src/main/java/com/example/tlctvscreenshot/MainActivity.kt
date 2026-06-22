@@ -42,6 +42,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -272,9 +273,12 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         )
     }
     var isExporting by remember { mutableStateOf(false) }
+    val appSettings = remember(context) { context.getSharedPreferences("app_settings", Context.MODE_PRIVATE) }
+    var debugModeEnabled by remember { mutableStateOf(appSettings.getBoolean("debug_mode_enabled", false)) }
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
     fun currentTvIp() = selectedDevice?.ip?.ifBlank { tvIp } ?: tvIp
@@ -526,6 +530,17 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         )
     }
 
+    if (showSettingsDialog) {
+        SettingsDialog(
+            debugModeEnabled = debugModeEnabled,
+            onDebugModeEnabledChange = { enabled ->
+                debugModeEnabled = enabled
+                appSettings.edit().putBoolean("debug_mode_enabled", enabled).apply()
+            },
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -542,7 +557,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             MediaHomeHeader(
                 selectedDevice = selectedDevice,
                 fastCaptureStatus = fastCaptureUiStatus,
-                onConnectClick = { showConnectDialog = true }
+                onConnectClick = { showConnectDialog = true },
+                onSettingsClick = { showSettingsDialog = true }
             )
 
             Row(
@@ -581,11 +597,13 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                 )
             }
 
-            ActivityStatusPanel(
-                tclStatus = tclStatus,
-                galleryStatus = galleryStatus,
-                remoteStatus = remoteStatus
-            )
+            if (debugModeEnabled) {
+                ActivityStatusPanel(
+                    tclStatus = tclStatus,
+                    galleryStatus = galleryStatus,
+                    remoteStatus = remoteStatus
+                )
+            }
 
             GallerySection(
                 selectedTab = selectedGalleryTab,
@@ -638,7 +656,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 private fun MediaHomeHeader(
     selectedDevice: SelectedTclDevice?,
     fastCaptureStatus: FastCaptureUiStatus,
-    onConnectClick: () -> Unit
+    onConnectClick: () -> Unit,
+    onSettingsClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -670,8 +689,54 @@ private fun MediaHomeHeader(
                 color = if (fastCaptureStatus.ready) SuccessColor else MutedText
             )
         }
-        Text("Gallery", style = MaterialTheme.typography.labelLarge, color = MutedText)
+        TextButton(
+            modifier = Modifier.testTag("settings_menu_button"),
+            onClick = onSettingsClick,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            Text("☰", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        }
     }
+}
+
+@Composable
+private fun SettingsDialog(
+    debugModeEnabled: Boolean,
+    onDebugModeEnabledChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("settings_dialog"),
+        confirmButton = { TextButton(modifier = Modifier.testTag("settings_done_button"), onClick = onDismiss) { Text("Done") } },
+        title = { Text("Settings") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onDebugModeEnabledChange(!debugModeEnabled) }
+                        .testTag("debug_mode_row"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Debug mode", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Show the activity pane with capture, gallery, and remote status messages.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MutedText
+                        )
+                    }
+                    Switch(
+                        modifier = Modifier.testTag("debug_mode_switch"),
+                        checked = debugModeEnabled,
+                        onCheckedChange = onDebugModeEnabledChange
+                    )
+                }
+            }
+        }
+    )
 }
 
 @Composable

@@ -41,6 +41,7 @@ class MediaHomeUiTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.getSharedPreferences("selected_tcl_device", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("tcl_6553_identity", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("app_settings", Context.MODE_PRIVATE).edit().clear().commit()
         File(context.filesDir, "TCast/Images").deleteRecursively()
 
         val intent = Intent(context, MainActivity::class.java)
@@ -66,6 +67,15 @@ class MediaHomeUiTest {
         assertTrue("No node found for text: $text", nodes.isNotEmpty())
     }
 
+    private fun enableDebugActivityPane() {
+        composeRule.onNodeWithTag("settings_menu_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("debug_mode_row").performClick()
+        composeRule.onNodeWithTag("settings_done_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
+    }
+
     @Test
     fun homeScreenRendersDarkMediaDashboardWidgets() {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
@@ -75,7 +85,8 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("action_cast_photo").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
@@ -89,6 +100,20 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("gallery_tab_Videos").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_tab_Favorites").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_refresh_button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun settingsCanEnableDebugActivityPane() {
+        composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_menu_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        assertAnyTextDisplayed("Settings")
+        assertAnyTextDisplayed("Debug mode")
+        composeRule.onNodeWithTag("debug_mode_row").assertHasClickAction().performClick()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_done_button").performClick()
+        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
     }
 
     @Test
@@ -115,6 +140,7 @@ class MediaHomeUiTest {
 
     @Test
     fun captureTileAddsGalleryItemAndGalleryActionsWork() {
+        enableDebugActivityPane()
         composeRule.onNodeWithTag("action_capture_tv").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithTag("gallery_item").fetchSemanticsNodes().isNotEmpty()
@@ -151,6 +177,7 @@ class MediaHomeUiTest {
 
     @Test
     fun mediaTilesAndGalleryTabsRespond() {
+        enableDebugActivityPane()
         composeRule.onNodeWithTag("action_cast_photo").performClick()
         assertAnyTextDisplayed("Photo casting is not required", substring = true)
         composeRule.onNodeWithTag("action_cast_video").performClick()
