@@ -100,6 +100,16 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("action_cast_photo").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
+        val captureBounds = composeRule.onNodeWithTag("action_capture_tv").fetchSemanticsNode().boundsInRoot
+        val photoBounds = composeRule.onNodeWithTag("action_cast_photo").fetchSemanticsNode().boundsInRoot
+        val videoBounds = composeRule.onNodeWithTag("action_cast_video").fetchSemanticsNode().boundsInRoot
+        val musicBounds = composeRule.onNodeWithTag("action_cast_music").fetchSemanticsNode().boundsInRoot
+        assertEquals(captureBounds.top, photoBounds.top, 1f)
+        assertEquals(captureBounds.top, videoBounds.top, 1f)
+        assertEquals(captureBounds.top, musicBounds.top, 1f)
+        assertTrue(photoBounds.left > captureBounds.left)
+        assertTrue(videoBounds.left > photoBounds.left)
+        assertTrue(musicBounds.left > videoBounds.left)
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHeightIsEqualTo(48.dp)
