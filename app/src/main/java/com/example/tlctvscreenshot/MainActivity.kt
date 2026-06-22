@@ -597,9 +597,6 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                         verticalArrangement = Arrangement.spacedBy(18.dp)
                     ) {
                         MediaHomeHeader(
-                            selectedDevice = selectedDevice,
-                            fastCaptureStatus = fastCaptureUiStatus,
-                            onConnectClick = { openConnectDialog() },
                             onSettingsClick = { coroutineScope.launch { settingsDrawerState.open() } }
                         )
 
@@ -684,45 +681,20 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
 @Composable
 private fun MediaHomeHeader(
-    selectedDevice: SelectedTclDevice?,
-    fastCaptureStatus: FastCaptureUiStatus,
-    onConnectClick: () -> Unit,
     onSettingsClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onConnectClick)
+            .height(48.dp)
             .testTag("top_status_area"),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.End
     ) {
-        Button(
-            modifier = Modifier.testTag("top_tv_button"),
-            onClick = onConnectClick,
-            colors = ButtonDefaults.buttonColors(containerColor = PanelColor),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
-        ) {
-            Text("TV", fontWeight = FontWeight.Bold)
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text("Media Cast", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(
-                selectedDevice?.let { "Connected to ${it.name.ifBlank { "TCL TV" }}" } ?: "Connect a TV to capture and control",
-                style = MaterialTheme.typography.bodySmall,
-                color = MutedText
-            )
-            Text(
-                fastCaptureStatus.title,
-                modifier = Modifier.testTag("fast_capture_status"),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (fastCaptureStatus.ready) SuccessColor else MutedText
-            )
-        }
         TextButton(
             modifier = Modifier.testTag("settings_menu_button"),
             onClick = onSettingsClick,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Text("☰", fontSize = 24.sp, fontWeight = FontWeight.Bold)
         }

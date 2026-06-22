@@ -4,11 +4,11 @@ import android.content.Context
 import android.content.Intent
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertWidthIsEqualTo
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -92,20 +92,18 @@ class MediaHomeUiTest {
     @Test
     fun homeScreenRendersDarkMediaDashboardWidgets() {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
-        assertAnyTextDisplayed("Media Cast")
-        composeRule.onNodeWithTag("top_tv_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onAllNodesWithText("Media Cast").assertCountEquals(0)
+        composeRule.onNodeWithTag("top_tv_button").assertDoesNotExist()
         composeRule.onNodeWithTag("action_capture_tv").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_photo").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
-        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHasClickAction()
+        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHeightIsEqualTo(48.dp)
         composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("bottom_remote_button").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("fast_capture_status", useUnmergedTree = true).assertTextContains("Connect TV for fast capture")
-
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
         composeRule.onNodeWithTag("gallery_section").assertIsDisplayed()
         composeRule.onNodeWithTag("gallery_tab_All").assertIsDisplayed().assertIsEnabled()
@@ -134,7 +132,7 @@ class MediaHomeUiTest {
 
     @Test
     fun connectDialogDiscoversImmediatelyAndConnectsFromDeviceCard() {
-        composeRule.onNodeWithTag("top_tv_button").performClick()
+        composeRule.onNodeWithTag("bottom_connect_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
         assertAnyTextDisplayed("Connect TV")
         assertAnyTextDisplayed("Choose a device on this Wi-Fi")
@@ -239,11 +237,6 @@ class MediaHomeUiTest {
     @Test
     fun bottomConnectAndRemoteControlsUpdateStatus() {
         composeRule.onNodeWithTag("bottom_connect_button").performClick()
-        composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
-        composeRule.onNodeWithTag("connect_done_button").performClick()
-        composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
-
-        composeRule.onNodeWithTag("top_status_area").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
