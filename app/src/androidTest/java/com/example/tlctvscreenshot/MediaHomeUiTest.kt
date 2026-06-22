@@ -6,6 +6,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertWidthIsEqualTo
@@ -72,10 +73,10 @@ class MediaHomeUiTest {
 
     private fun enableDebugActivityPane() {
         composeRule.onNodeWithTag("settings_menu_button").performClick()
-        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_drawer").assertIsDisplayed()
         composeRule.onNodeWithTag("debug_mode_row").performClick()
         composeRule.onNodeWithTag("settings_done_button").performClick()
-        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
         composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
     }
 
@@ -116,13 +117,13 @@ class MediaHomeUiTest {
     fun settingsCanEnableDebugActivityPane() {
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").performClick()
-        composeRule.onNodeWithTag("settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_drawer").assertIsDisplayed().assertWidthIsEqualTo(320.dp)
         assertAnyTextDisplayed("Settings")
         assertAnyTextDisplayed("Debug mode")
         composeRule.onNodeWithTag("debug_mode_row").assertHasClickAction().performClick()
         composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
         composeRule.onNodeWithTag("settings_done_button").performClick()
-        composeRule.onNodeWithTag("settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
         composeRule.onNodeWithTag("status_panel").assertIsDisplayed()
     }
 

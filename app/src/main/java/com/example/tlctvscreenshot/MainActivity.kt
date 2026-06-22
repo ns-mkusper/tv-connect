@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -48,13 +49,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
@@ -291,7 +296,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    val settingsDrawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
     fun currentTvIp() = selectedDevice?.ip?.ifBlank { tvIp } ?: tvIp
@@ -559,126 +564,129 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         )
     }
 
-    if (showSettingsDialog) {
-        SettingsDialog(
-            debugModeEnabled = debugModeEnabled,
-            onDebugModeEnabledChange = { enabled ->
-                debugModeEnabled = enabled
-                appSettings.edit().putBoolean("debug_mode_enabled", enabled).apply()
-            },
-            onDismiss = { showSettingsDialog = false }
-        )
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppBackground)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("home_root")
-                .verticalScroll(rememberScrollState())
-                .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
-            MediaHomeHeader(
-                selectedDevice = selectedDevice,
-                fastCaptureStatus = fastCaptureUiStatus,
-                onConnectClick = { openConnectDialog() },
-                onSettingsClick = { showSettingsDialog = true }
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                MediaActionTile(
-                    title = "Capture TV",
-                    subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
-                    enabled = !isCapturingTcl,
-                    modifier = Modifier.weight(1f).testTag("action_capture_tv"),
-                    onClick = { captureTv() }
-                )
-                MediaActionTile(
-                    title = "Cast Photo",
-                    subtitle = "Gallery",
-                    modifier = Modifier.weight(1f).testTag("action_cast_photo"),
-                    onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                MediaActionTile(
-                    title = "Cast Video",
-                    subtitle = "Media",
-                    modifier = Modifier.weight(1f).testTag("action_cast_video"),
-                    onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
-                )
-                MediaActionTile(
-                    title = "Cast Music",
-                    subtitle = "Audio",
-                    modifier = Modifier.weight(1f).testTag("action_cast_music"),
-                    onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
-                )
-            }
-
-            if (debugModeEnabled) {
-                ActivityStatusPanel(
-                    tclStatus = tclStatus,
-                    galleryStatus = galleryStatus,
-                    remoteStatus = remoteStatus
-                )
-            }
-
-            GallerySection(
-                selectedTab = selectedGalleryTab,
-                onSelectedTabChange = { selectedGalleryTab = it },
-                screenshots = screenshots,
-                selectedScreenshot = selectedScreenshot,
-                galleryBitmap = galleryBitmap,
-                isExporting = isExporting,
-                onRefresh = { refreshGallery() },
-                onOpen = { file ->
-                    selectedScreenshot = file
-                    galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
-                    galleryStatus = "Opened ${file.name}."
+    ModalNavigationDrawer(
+        drawerState = settingsDrawerState,
+        drawerContent = {
+            SettingsDrawer(
+                debugModeEnabled = debugModeEnabled,
+                onDebugModeEnabledChange = { enabled ->
+                    debugModeEnabled = enabled
+                    appSettings.edit().putBoolean("debug_mode_enabled", enabled).apply()
                 },
-                onShare = { file ->
-                    if (testMode) {
-                        galleryStatus = "Test shared ${file.name}."
-                    } else {
-                        shareScreenshot(context, file)
-                    }
-                },
-                onExport = { file ->
-                    if (testMode) {
-                        galleryStatus = "Test exported ${file.name}."
-                    } else {
-                        isExporting = true
-                        galleryStatus = "Exporting ${file.name} to Pictures..."
-                        coroutineScope.launch {
-                            runCatching { exportScreenshotToPictures(context, file) }
-                                .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
-                                .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
-                            isExporting = false
-                        }
-                    }
-                },
-                onDelete = { file -> deleteCandidate = file }
+                onDismiss = { coroutineScope.launch { settingsDrawerState.close() } }
             )
         }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppBackground)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("home_root")
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                MediaHomeHeader(
+                    selectedDevice = selectedDevice,
+                    fastCaptureStatus = fastCaptureUiStatus,
+                    onConnectClick = { openConnectDialog() },
+                    onSettingsClick = { coroutineScope.launch { settingsDrawerState.open() } }
+                )
 
-        BottomMediaBar(
-            fastCaptureStatus = fastCaptureUiStatus,
-            onConnectClick = { openConnectDialog() },
-            onRemoteClick = { showRemoteDialog = true },
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
-    }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MediaActionTile(
+                        title = "Capture TV",
+                        subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
+                        enabled = !isCapturingTcl,
+                        modifier = Modifier.weight(1f).testTag("action_capture_tv"),
+                        onClick = { captureTv() }
+                    )
+                    MediaActionTile(
+                        title = "Cast Photo",
+                        subtitle = "Gallery",
+                        modifier = Modifier.weight(1f).testTag("action_cast_photo"),
+                        onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MediaActionTile(
+                        title = "Cast Video",
+                        subtitle = "Media",
+                        modifier = Modifier.weight(1f).testTag("action_cast_video"),
+                        onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
+                    )
+                    MediaActionTile(
+                        title = "Cast Music",
+                        subtitle = "Audio",
+                        modifier = Modifier.weight(1f).testTag("action_cast_music"),
+                        onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
+                    )
+                }
+
+                if (debugModeEnabled) {
+                    ActivityStatusPanel(
+                        tclStatus = tclStatus,
+                        galleryStatus = galleryStatus,
+                        remoteStatus = remoteStatus
+                    )
+                }
+
+                GallerySection(
+                    selectedTab = selectedGalleryTab,
+                    onSelectedTabChange = { selectedGalleryTab = it },
+                    screenshots = screenshots,
+                    selectedScreenshot = selectedScreenshot,
+                    galleryBitmap = galleryBitmap,
+                    isExporting = isExporting,
+                    onRefresh = { refreshGallery() },
+                    onOpen = { file ->
+                        selectedScreenshot = file
+                        galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                        galleryStatus = "Opened ${file.name}."
+                    },
+                    onShare = { file ->
+                        if (testMode) {
+                            galleryStatus = "Test shared ${file.name}."
+                        } else {
+                            shareScreenshot(context, file)
+                        }
+                    },
+                    onExport = { file ->
+                        if (testMode) {
+                            galleryStatus = "Test exported ${file.name}."
+                        } else {
+                            isExporting = true
+                            galleryStatus = "Exporting ${file.name} to Pictures..."
+                            coroutineScope.launch {
+                                runCatching { exportScreenshotToPictures(context, file) }
+                                    .onSuccess { galleryStatus = "Exported ${file.name} to Pictures." }
+                                    .onFailure { error -> galleryStatus = "Export failed: ${error.message ?: error::class.java.simpleName}" }
+                                isExporting = false
+                            }
+                        }
+                    },
+                    onDelete = { file -> deleteCandidate = file }
+                )
+            }
+
+            BottomMediaBar(
+                fastCaptureStatus = fastCaptureUiStatus,
+                onConnectClick = { openConnectDialog() },
+                onRemoteClick = { showRemoteDialog = true },
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+}
 }
 
 @Composable
@@ -729,43 +737,59 @@ private fun MediaHomeHeader(
 }
 
 @Composable
-private fun SettingsDialog(
+private fun SettingsDrawer(
     debugModeEnabled: Boolean,
     onDebugModeEnabledChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.testTag("settings_dialog"),
-        confirmButton = { TextButton(modifier = Modifier.testTag("settings_done_button"), onClick = onDismiss) { Text("Done") } },
-        title = { Text("Settings") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onDebugModeEnabledChange(!debugModeEnabled) }
-                        .testTag("debug_mode_row"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Debug mode", fontWeight = FontWeight.Bold)
-                        Text(
-                            "Show the activity pane with capture, gallery, and remote status messages.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MutedText
-                        )
-                    }
-                    Switch(
-                        modifier = Modifier.testTag("debug_mode_switch"),
-                        checked = debugModeEnabled,
-                        onCheckedChange = onDebugModeEnabledChange
+    ModalDrawerSheet(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(320.dp)
+            .testTag("settings_drawer"),
+        drawerShape = RoundedCornerShape(0.dp),
+        drawerContainerColor = PanelColor,
+        drawerContentColor = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 18.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Settings",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(modifier = Modifier.testTag("settings_done_button"), onClick = onDismiss) { Text("Done") }
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onDebugModeEnabledChange(!debugModeEnabled) }
+                    .testTag("debug_mode_row"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Debug mode", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Show the activity pane with capture, gallery, and remote status messages.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedText
                     )
                 }
+                Switch(
+                    modifier = Modifier.testTag("debug_mode_switch"),
+                    checked = debugModeEnabled,
+                    onCheckedChange = onDebugModeEnabledChange
+                )
             }
         }
-    )
+    }
 }
 
 @Composable
