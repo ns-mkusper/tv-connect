@@ -15,6 +15,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
@@ -27,6 +28,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -118,6 +120,9 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").performClick()
         composeRule.onNodeWithTag("settings_drawer").assertIsDisplayed().assertWidthIsEqualTo(320.dp)
+        val drawerBounds = composeRule.onNodeWithTag("settings_drawer").fetchSemanticsNode().boundsInRoot
+        val rootBounds = composeRule.onRoot().fetchSemanticsNode().boundsInRoot
+        assertEquals(rootBounds.right, drawerBounds.right, 1f)
         assertAnyTextDisplayed("Settings")
         assertAnyTextDisplayed("Debug mode")
         composeRule.onNodeWithTag("debug_mode_row").assertHasClickAction().performClick()
