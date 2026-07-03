@@ -47,10 +47,7 @@ class MediaHomeUiTest {
     @Before
     fun launchInUiTestMode() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        context.getSharedPreferences("selected_tcl_device", Context.MODE_PRIVATE).edit().clear().commit()
-        context.getSharedPreferences("tcl_6553_identity", Context.MODE_PRIVATE).edit().clear().commit()
-        context.getSharedPreferences("app_settings", Context.MODE_PRIVATE).edit().clear().commit()
-        File(context.filesDir, "Screenshots").deleteRecursively()
+        clearPersistentUiTestState(context)
 
         val intent = Intent(context, MainActivity::class.java)
             .putExtra("com.example.tlctvscreenshot.UI_TEST_MODE", true)
@@ -61,6 +58,15 @@ class MediaHomeUiTest {
     @After
     fun closeActivity() {
         scenario?.close()
+        scenario = null
+        clearPersistentUiTestState(ApplicationProvider.getApplicationContext())
+    }
+
+    private fun clearPersistentUiTestState(context: Context) {
+        context.getSharedPreferences("selected_tcl_device", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("tcl_6553_identity", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("app_settings", Context.MODE_PRIVATE).edit().clear().commit()
+        File(context.filesDir, "Screenshots").deleteRecursively()
     }
 
     private fun assertAnyTextDisplayed(text: String, substring: Boolean = false) {
@@ -153,8 +159,8 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("bottom_connect_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertIsDisplayed()
         assertAnyTextDisplayed("Connect TV")
-        assertAnyTextDisplayed("Choose a device on this Wi-Fi")
-        assertAnyTextDisplayed("Current Wi-Fi: Test Wi-Fi")
+        assertAnyTextDisplayed("Choose a device on this network")
+        assertAnyTextDisplayed("Current network: Test Wi-Fi")
         assertAnyTextDisplayed("No TV selected.")
         composeRule.onNodeWithTag("wifi_settings_button").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("discover_button").assertWidthIsEqualTo(128.dp)
@@ -176,6 +182,22 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
         assertAnyTextExists("TV connected — fallback capture only")
+        composeRule.onNodeWithTag("bottom_fast_retry_button").assertIsDisplayed().assertIsEnabled()
+    }
+
+    @Test
+    fun fallbackStatusCanRetryFastConnection() {
+        enableDebugActivityPane()
+        composeRule.onNodeWithTag("bottom_connect_button").performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithTag("discovered_device_card").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("discovered_device_card").performClick()
+        composeRule.onNodeWithTag("connect_done_button").performClick()
+        assertAnyTextExists("TV connected — fallback capture only")
+
+        composeRule.onNodeWithTag("bottom_fast_retry_button").assertIsDisplayed().assertHasClickAction().performClick()
+        assertAnyTextExists("Retrying fast TV connection...")
     }
 
     @Test

@@ -282,7 +282,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var isCapturingTcl by remember { mutableStateOf(false) }
     var activeRemoteSends by remember { mutableStateOf(0) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
-    var discoveryStatus by remember { mutableStateOf("Open Connect TV to search for nearby devices.") }
+    var discoveryStatus by remember { mutableStateOf("Open Connect TV to search for nearby TVs on this network.") }
     var isDiscovering by remember { mutableStateOf(false) }
     var currentWifiName by remember { mutableStateOf(if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
@@ -344,7 +344,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         isDiscovering = true
         discoveredDevices = emptyList()
         currentWifiName = if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)
-        discoveryStatus = "Searching for nearby TVs on the current Wi-Fi..."
+        discoveryStatus = "Searching for nearby TVs on this network..."
         if (testMode) {
             val testDevice = testTclDevice()
             discoveredDevices = listOf(testDevice)
@@ -363,7 +363,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             }.onSuccess { devices ->
                 discoveredDevices = devices
                 discoveryStatus = if (devices.isEmpty()) {
-                    "No TVs found. Check that the phone and TV are on the same Wi-Fi, then refresh."
+                    "No TVs found. Check that the phone and TV are on the same local network, then refresh."
                 } else {
                     "Found ${devices.size} TV candidate(s). Select one to connect."
                 }
@@ -379,6 +379,17 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         if (!isDiscovering) {
             startDiscovery()
         }
+    }
+
+    fun retryFastConnection() {
+        val ip = currentTvIp().trim()
+        if (ip.isBlank()) {
+            tclStatus = "Please connect your TV first."
+            openConnectDialog()
+            return
+        }
+        tclStatus = "Retrying fast TV connection..."
+        tclSessionManager.reconnect()
     }
 
     fun captureTv() {
@@ -671,6 +682,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     BottomMediaBar(
                         fastCaptureStatus = fastCaptureUiStatus,
                         onConnectClick = { openConnectDialog() },
+                        onFastConnectClick = { retryFastConnection() },
                         onRemoteClick = { showRemoteDialog = true },
                         modifier = Modifier.align(Alignment.BottomCenter)
                     )
@@ -1075,16 +1087,18 @@ private fun GalleryTab(tab: String, selected: Boolean, onClick: () -> Unit) {
 private fun BottomMediaBar(
     fastCaptureStatus: FastCaptureUiStatus,
     onConnectClick: () -> Unit,
+    onFastConnectClick: () -> Unit,
     onRemoteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val statusClick = if (fastCaptureStatus.retryAvailable) onFastConnectClick else onConnectClick
     Column(modifier = modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("bottom_status_bar")
                 .height(34.dp)
-                .clickable(onClick = onConnectClick)
+                .clickable(onClick = statusClick)
                 .background(if (fastCaptureStatus.ready) SuccessColor else AccentColor),
             contentAlignment = Alignment.Center
         ) {
@@ -1107,7 +1121,12 @@ private fun BottomMediaBar(
                 shape = RoundedCornerShape(28.dp),
                 contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
             ) { Text("Remote", fontWeight = FontWeight.Bold) }
-            TextButton(modifier = Modifier.testTag("bottom_tv_button"), onClick = onConnectClick) { Text("TV") }
+            TextButton(
+                modifier = Modifier.testTag(if (fastCaptureStatus.retryAvailable) "bottom_fast_retry_button" else "bottom_tv_button"),
+                onClick = statusClick
+            ) {
+                Text(if (fastCaptureStatus.retryAvailable) "Retry fast" else "TV")
+            }
         }
     }
 }
@@ -1206,9 +1225,9 @@ private fun ConnectTvDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         SearchingTvIcon(isSearching = isDiscovering)
-                        Text("Choose a device on this Wi-Fi", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                        Text("Choose a device on this network", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                         TextButton(modifier = Modifier.testTag("wifi_settings_button"), onClick = onOpenWifiSettings) {
-                            Text("Current Wi-Fi: $currentWifiName")
+                            Text("Current network: $currentWifiName")
                         }
                     }
                 }
@@ -1234,7 +1253,7 @@ private fun ConnectTvDialog(
                 }
 
                 if (discoveredDevices.isEmpty() && !isDiscovering) {
-                    Text("No devices listed yet. Refresh after checking Wi-Fi.", style = MaterialTheme.typography.bodySmall)
+                    Text("No devices listed yet. Refresh after checking the local network.", style = MaterialTheme.typography.bodySmall)
                 }
 
                 discoveredDevices.forEach { device ->
@@ -1467,7 +1486,8 @@ private data class FastCaptureUiStatus(
     val title: String,
     val detail: String,
     val captureSubtitle: String,
-    val ready: Boolean
+    val ready: Boolean,
+    val retryAvailable: Boolean
 )
 
 private fun fastCaptureUiStatus(connected: Boolean, state: Tcl6553SessionState): FastCaptureUiStatus = when {
@@ -1475,31 +1495,36 @@ private fun fastCaptureUiStatus(connected: Boolean, state: Tcl6553SessionState):
         title = "Connect TV for fast capture",
         detail = "Connect to your TV before capturing.",
         captureSubtitle = "Connect TV",
-        ready = false
+        ready = false,
+        retryAvailable = false
     )
     state == Tcl6553SessionState.READY -> FastCaptureUiStatus(
         title = "TV fully connected — fast capture ready",
         detail = "The TV is ready for the fastest screenshots.",
         captureSubtitle = "Fast ready",
-        ready = true
+        ready = true,
+        retryAvailable = false
     )
     state == Tcl6553SessionState.WARMING -> FastCaptureUiStatus(
         title = "TV connected — preparing fast capture",
         detail = "The app is getting the TV ready. Capture can still work.",
         captureSubtitle = "Preparing",
-        ready = false
+        ready = false,
+        retryAvailable = false
     )
     state == Tcl6553SessionState.RECONNECTING -> FastCaptureUiStatus(
         title = "TV connected — fast capture reconnecting",
         detail = "The app is reconnecting. Capture can still work.",
         captureSubtitle = "Reconnecting",
-        ready = false
+        ready = false,
+        retryAvailable = true
     )
     else -> FastCaptureUiStatus(
         title = "TV connected — fallback capture only",
         detail = "Fast capture is not ready. Capture can still work.",
         captureSubtitle = "Fallback",
-        ready = false
+        ready = false,
+        retryAvailable = true
     )
 }
 
@@ -1698,7 +1723,7 @@ private fun currentWifiDisplayName(context: Context): String {
     return wifiManager?.connectionInfo?.ssid
         ?.removeSurrounding("\"")
         ?.takeUnless { it.isBlank() || it == "<unknown ssid>" }
-        ?: "Check Wi-Fi"
+        ?: "Check network"
 }
 
 private fun deviceTypeIcon(deviceType: String): String = when (deviceType.trim().uppercase()) {
@@ -1950,6 +1975,7 @@ private class Tcl6553SessionManager {
     private var session: Tcl6553WarmSession? = null
     private var warmJob: Job? = null
     private var keepAliveJob: Job? = null
+    private var warmAttemptId = 0L
 
     fun configure(scope: CoroutineScope, config: Tcl6553SessionConfig) {
         synchronized(stateLock) {
@@ -1967,6 +1993,8 @@ private class Tcl6553SessionManager {
         startingState: Tcl6553SessionState
     ) {
         warmJob?.cancel()
+        warmAttemptId += 1
+        val attemptId = warmAttemptId
         _state.value = startingState
         warmJob = scope.launch(Dispatchers.IO) {
             val log = StringBuilder()
@@ -1974,7 +2002,7 @@ private class Tcl6553SessionManager {
                 .onFailure { error -> Log.i(LOG_TAG, "warm session failed: ${error.message ?: error::class.java.simpleName}") }
                 .getOrNull()
             synchronized(stateLock) {
-                if (this@Tcl6553SessionManager.config != config) {
+                if (attemptId != warmAttemptId || this@Tcl6553SessionManager.config != config) {
                     opened?.close()
                 } else if (opened != null) {
                     session = opened
@@ -2019,6 +2047,10 @@ private class Tcl6553SessionManager {
 
     fun reconnect() {
         synchronized(stateLock) {
+            warmJob?.cancel()
+            warmJob = null
+            keepAliveJob?.cancel()
+            keepAliveJob = null
             val opened = session
             if (opened != null) {
                 session = null
@@ -2046,10 +2078,12 @@ private class Tcl6553SessionManager {
 
     private fun scheduleWarmRetryLocked(scope: CoroutineScope, config: Tcl6553SessionConfig) {
         warmJob?.cancel()
+        warmAttemptId += 1
+        val attemptId = warmAttemptId
         warmJob = scope.launch(Dispatchers.IO) {
             delay(TCL_SESSION_RETRY_DELAY_MS)
             synchronized(stateLock) {
-                if (this@Tcl6553SessionManager.config == config && session == null) {
+                if (attemptId == warmAttemptId && this@Tcl6553SessionManager.config == config && session == null) {
                     startWarmLocked(scope, config, Tcl6553SessionState.RECONNECTING)
                 }
             }
@@ -2086,6 +2120,7 @@ private class Tcl6553SessionManager {
     }
 
     private fun closeLocked(updateState: Boolean) {
+        warmAttemptId += 1
         warmJob?.cancel()
         warmJob = null
         keepAliveJob?.cancel()
