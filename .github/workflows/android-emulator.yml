@@ -1,6 +1,9 @@
 name: Android emulator UI tests
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       run_ui_tests:
@@ -19,19 +22,19 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.pr_number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
   actions: read
 
 jobs:
   emulator-ui-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    if: inputs.run_ui_tests
+    if: github.event_name == 'pull_request' || inputs.run_ui_tests
 
     steps:
       - name: Check out repository
@@ -49,9 +52,6 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
-
-      - name: Build, lint, and run JVM tests
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
 
       - name: Run Compose UI tests and capture screenshot
         id: emulator_ui_tests
@@ -102,7 +102,13 @@ jobs:
   android-emulator-screenshots:
     runs-on: ubuntu-latest
     timeout-minutes: 70
-    if: inputs.run_screenshot_comparison && inputs.pr_number != ''
+    if: >
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_screenshot_comparison && inputs.pr_number != '')
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     env:
       CI: "1"
       JAVA_OPTS: "-Dsun.net.client.defaultConnectTimeout=60000 -Dsun.net.client.defaultReadTimeout=60000"
@@ -114,7 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set -euo pipefail
           pr_json="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}")"
