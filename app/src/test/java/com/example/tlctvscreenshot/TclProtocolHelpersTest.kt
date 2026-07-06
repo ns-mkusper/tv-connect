@@ -219,6 +219,17 @@ class TclProtocolHelpersTest {
         assertEquals("2.0 MB", invoke("formatFileSize", 2L * 1024L * 1024L))
     }
 
+    @Test
+    fun streamProbeTargetsCoverLikelyAvDiscoveryPorts() {
+        val targets = invoke("tvStreamProbeTargets") as List<*>
+        val ports = targets.map { field(it ?: error("Missing target"), "port") as Int }
+        assertTrue(ports.contains(554))
+        assertTrue(ports.contains(8008))
+        assertTrue(ports.contains(8009))
+        assertTrue(ports.contains(8443))
+        assertTrue(ports.contains(6553))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun readPacketRejectsOversizedLengths() {
         invoke("readTclPacket", DataInputStream(ByteArrayInputStream(byteArrayOf(0x00, 0x10, 0x00, 0x01))))

@@ -6,7 +6,16 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
+import android.graphics.Paint
+import android.graphics.Rect
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +32,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,19 +51,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -120,6 +132,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -156,6 +169,10 @@ private const val HTTP_PORT_SCAN_TIMEOUT_MS = 12_000L
 private const val TCL_SCREENSHOT_SHOT_COUNT = 1
 private const val TCL_SESSION_HEARTBEAT_INTERVAL_MS = 15_000L
 private const val TCL_SESSION_RETRY_DELAY_MS = 2_000L
+private const val VIDEO_CAPTURE_TARGET_FRAME_INTERVAL_MS = 550L
+private const val VIDEO_CAPTURE_MAX_DURATION_MS = 30_000L
+private const val VIDEO_CAPTURE_FRAME_RATE = 12
+private const val VIDEO_CAPTURE_BIT_RATE = 4_000_000
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
 private const val LOG_TAG = "TlcTvCapture"
@@ -213,6 +230,14 @@ private val TCL_REMOTE_VOLUME_ROW = listOf("Vol -", "Mute", "Vol +").map(::tclRe
 
 private val TCL_REMOTE_CHANNEL_ROW = listOf("Menu", "Ch -", "Ch +").map(::tclRemoteButton)
 
+private val SquareComponentShapes = Shapes(
+    extraSmall = CutCornerShape(0.dp),
+    small = CutCornerShape(0.dp),
+    medium = CutCornerShape(0.dp),
+    large = CutCornerShape(0.dp),
+    extraLarge = CutCornerShape(0.dp)
+)
+
 private fun remoteButtonTag(label: String): String =
     "remote_button_${label.replace(" ", "_").replace("+", "plus").replace("-", "minus")}"
 
@@ -244,7 +269,7 @@ private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE
 
 @Composable
 private fun TlcTvScreenshotApp(testMode: Boolean = false) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    MaterialTheme(colorScheme = darkColorScheme(), shapes = SquareComponentShapes) {
         Surface(modifier = Modifier.fillMaxSize()) {
             ScreenshotWorkbench(testMode = testMode)
         }
@@ -257,6 +282,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     SideEffect { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
     val screenshotDirectory = remember { screenshotDirectory(context) }
+    val videoDraftDirectory = remember { videoDraftDirectory(context) }
     val tclSessionManager = remember { Tcl6553SessionManager() }
     val fastCaptureState by tclSessionManager.state.collectAsState()
     DisposableEffect(Unit) {
@@ -279,6 +305,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var tclPhoneImei by remember { mutableStateOf(tclStablePhoneId) }
     var tclStatus by remember { mutableStateOf("Ready to capture from a connected TV.") }
     var remoteStatus by remember { mutableStateOf("Remote ready. Connect a TV before sending commands.") }
+    var streamProbeStatus by remember { mutableStateOf("TV stream probe not run.") }
+    var isProbingStreams by remember { mutableStateOf(false) }
     var isCapturingTcl by remember { mutableStateOf(false) }
     var activeRemoteSends by remember { mutableStateOf(0) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
@@ -287,7 +315,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var currentWifiName by remember { mutableStateOf(if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
     var selectedScreenshot by remember { mutableStateOf(screenshots.firstOrNull()) }
-    var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { BitmapFactory.decodeFile(it.absolutePath) }) }
+    var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { loadCapturePreview(it) }) }
     var galleryStatus by remember {
         mutableStateOf(
             if (screenshots.isEmpty()) "No saved captures yet." else "Loaded ${screenshots.size} saved capture(s)."
@@ -298,6 +326,9 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
+    var showVideoCaptureDialog by remember { mutableStateOf(false) }
+    var videoCaptureState by remember { mutableStateOf(VideoCaptureUiState()) }
+    var videoRecordingJob by remember { mutableStateOf<Job?>(null) }
     val settingsDrawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
@@ -336,7 +367,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         screenshots = loaded
         val nextSelected = preferredFile?.takeIf { it.exists() } ?: loaded.firstOrNull()
         selectedScreenshot = nextSelected
-        galleryBitmap = nextSelected?.let { BitmapFactory.decodeFile(it.absolutePath) }
+        galleryBitmap = nextSelected?.let { loadCapturePreview(it) }
         galleryStatus = if (loaded.isEmpty()) "No saved captures yet." else "Loaded ${loaded.size} saved capture(s)."
     }
 
@@ -467,6 +498,234 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         }
     }
 
+    fun openVideoCaptureDialog() {
+        showVideoCaptureDialog = true
+        videoCaptureState = VideoCaptureUiState(
+            includeAudio = false,
+            audioStatus = "TV audio stream unavailable",
+            status = "Ready to record TV video."
+        )
+    }
+
+    fun toggleVideoAudio() {
+        videoCaptureState = videoCaptureState.copy(
+            includeAudio = false,
+            audioStatus = "TV audio stream unavailable"
+        )
+    }
+
+    fun stopVideoRecording() {
+        videoRecordingJob?.cancel(CancellationException("Stopped by user"))
+    }
+
+    fun discardVideoCapture() {
+        videoRecordingJob?.cancel(CancellationException("Discarded by user"))
+        videoCaptureState.file?.delete()
+        videoCaptureState.audioFile?.delete()
+        videoRecordingJob = null
+        videoCaptureState = VideoCaptureUiState(status = "Recording discarded.")
+        showVideoCaptureDialog = false
+        refreshGallery()
+    }
+
+    fun keepVideoCapture() {
+        val draftFile = videoCaptureState.file ?: return
+        val audioFile = videoCaptureState.audioFile
+        val includeAudio = videoCaptureState.includeAudio
+        videoCaptureState = videoCaptureState.copy(phase = VideoCapturePhase.SAVING, status = "Saving video...")
+        coroutineScope.launch {
+            runCatching {
+                val finalFile = uniqueVideoCaptureFile(screenshotDirectory, System.currentTimeMillis())
+                if (includeAudio && audioFile?.exists() == true) {
+                    muxVideoAndOptionalAudio(draftFile, audioFile, finalFile, 0L, videoDurationMs(draftFile), includeAudio = true)
+                    draftFile.delete()
+                    audioFile.delete()
+                } else {
+                    moveCaptureFile(draftFile, finalFile)
+                    audioFile?.delete()
+                }
+                if (!testMode) exportVideoToMovies(context.applicationContext, finalFile)
+                finalFile
+            }.onSuccess { file ->
+                selectedScreenshot = file
+                galleryBitmap = loadCapturePreview(file)
+                refreshGallery(file)
+                galleryStatus = "Saved ${file.name} to Gallery and Movies."
+                showVideoCaptureDialog = false
+                videoCaptureState = VideoCaptureUiState(status = "Video saved.")
+            }.onFailure { error ->
+                videoCaptureState = videoCaptureState.copy(
+                    phase = VideoCapturePhase.REVIEW,
+                    status = "Save failed: ${error.message ?: error::class.java.simpleName}"
+                )
+            }
+        }
+    }
+
+    fun saveEditedVideoCapture(startText: String, endText: String) {
+        val sourceFile = videoCaptureState.file ?: return
+        val audioFile = videoCaptureState.audioFile
+        val includeAudio = videoCaptureState.includeAudio
+        val startMs = (startText.toDoubleOrNull()?.times(1_000.0)?.toLong() ?: 0L).coerceAtLeast(0L)
+        val endMs = (endText.toDoubleOrNull()?.times(1_000.0)?.toLong() ?: videoCaptureState.durationMs)
+            .coerceAtLeast(startMs + 250L)
+        videoCaptureState = videoCaptureState.copy(phase = VideoCapturePhase.SAVING, status = "Saving edited video...")
+        coroutineScope.launch {
+            runCatching {
+                val outputFile = uniqueVideoCaptureFile(screenshotDirectory, System.currentTimeMillis(), suffix = "edited")
+                muxVideoAndOptionalAudio(sourceFile, audioFile, outputFile, startMs, endMs, includeAudio)
+                if (sourceFile.parentFile?.canonicalPath == videoDraftDirectory.canonicalPath) {
+                    sourceFile.delete()
+                }
+                audioFile?.delete()
+                if (!testMode) exportVideoToMovies(context.applicationContext, outputFile)
+                outputFile
+            }.onSuccess { editedFile ->
+                selectedScreenshot = editedFile
+                galleryBitmap = loadCapturePreview(editedFile)
+                refreshGallery(editedFile)
+                galleryStatus = "Saved edited ${editedFile.name} to Gallery and Movies."
+                showVideoCaptureDialog = false
+                videoCaptureState = VideoCaptureUiState(status = "Edited video saved.")
+            }.onFailure { error ->
+                videoCaptureState = videoCaptureState.copy(
+                    phase = VideoCapturePhase.REVIEW,
+                    status = "Edit failed: ${error.message ?: error::class.java.simpleName}"
+                )
+            }
+        }
+    }
+
+    fun startVideoRecording() {
+        if (videoRecordingJob?.isActive == true) return
+        val ip = currentTvIp().trim()
+        if (!testMode && ip.isBlank()) {
+            tclStatus = "Please connect your TV first."
+            videoCaptureState = VideoCaptureUiState(status = "Connect your TV before recording.")
+            openConnectDialog()
+            return
+        }
+        val outputFile = uniqueVideoCaptureFile(videoDraftDirectory, System.currentTimeMillis(), suffix = "draft")
+        val startedAt = System.currentTimeMillis()
+        videoCaptureState = videoCaptureState.copy(
+            phase = VideoCapturePhase.RECORDING,
+            startedAtMillis = startedAt,
+            elapsedMs = 0L,
+            frameCount = 0,
+            status = "Recording TV video...",
+            file = outputFile,
+            audioFile = null,
+            includeAudio = false,
+            audioStatus = "TV audio stream unavailable",
+            previewFrame = null,
+            timelineFrames = emptyList()
+        )
+        tclStatus = "Recording TV video..."
+        videoRecordingJob = coroutineScope.launch {
+            runCatching {
+                val result = if (testMode) {
+                    recordTestTvVideo(
+                        outputFile = outputFile,
+                        onProgress = { frameCount, elapsedMs ->
+                            videoCaptureState = videoCaptureState.copy(
+                                elapsedMs = elapsedMs,
+                                frameCount = frameCount,
+                                status = "Recording test video: ${formatDurationMs(elapsedMs)} • $frameCount frames"
+                            )
+                        },
+                        onPreviewFrame = { frame ->
+                            videoCaptureState = videoCaptureState.withPreviewFrame(frame)
+                        }
+                    )
+                } else {
+                    recordTcl6553Video(
+                        tvIp = ip,
+                        port = TCL_COMMAND_PORT,
+                        phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
+                        uuid = tclUuid.ifBlank { androidId },
+                        phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                        outputFile = outputFile,
+                        sessionManager = tclSessionManager,
+                        isActive = { videoRecordingJob?.isActive == true },
+                        onProgress = { frameCount, elapsedMs ->
+                            videoCaptureState = videoCaptureState.copy(
+                                elapsedMs = elapsedMs,
+                                frameCount = frameCount,
+                                status = "Recording: ${formatDurationMs(elapsedMs)} • $frameCount frames"
+                            )
+                        },
+                        onPreviewFrame = { frame ->
+                            videoCaptureState = videoCaptureState.withPreviewFrame(frame)
+                        }
+                    )
+                }
+                result
+            }.onSuccess { result ->
+                videoCaptureState = videoCaptureState.copy(
+                    phase = VideoCapturePhase.REVIEW,
+                    elapsedMs = result.durationMs,
+                    frameCount = result.frameCount,
+                    file = result.file,
+                    audioFile = null,
+                    durationMs = result.durationMs,
+                    trimStartText = "0.0",
+                    trimEndText = formatSecondsText(result.durationMs),
+                    status = "Recorded ${formatDurationMs(result.durationMs)} with ${result.frameCount} frame(s). Review before saving.",
+                    audioStatus = "TV audio stream unavailable"
+                )
+                tclStatus = "Recorded video in ${formatDurationMs(result.durationMs)}."
+                galleryStatus = "Review video, then keep or save an edit."
+            }.onFailure { error ->
+                if (error is CancellationException && outputFile.exists()) {
+                    val durationMs = videoDurationMs(outputFile).takeIf { it > 0L }
+                        ?: (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+                    val frameCount = videoCaptureState.frameCount
+                    videoCaptureState = videoCaptureState.copy(
+                        phase = VideoCapturePhase.REVIEW,
+                        elapsedMs = durationMs,
+                        frameCount = frameCount,
+                        file = outputFile,
+                        audioFile = null,
+                        durationMs = durationMs,
+                        trimStartText = "0.0",
+                        trimEndText = formatSecondsText(durationMs),
+                        status = "Recording stopped at ${formatDurationMs(durationMs)} with $frameCount frame(s).",
+                        audioStatus = "TV audio stream unavailable"
+                    )
+                    tclStatus = "Recording stopped."
+                    galleryStatus = "Review video, then keep or save an edit."
+                } else {
+                    outputFile.delete()
+                    videoCaptureState = VideoCaptureUiState(status = "Video recording failed: ${error.message ?: error::class.java.simpleName}")
+                    tclStatus = "Video recording failed: ${error.message ?: error::class.java.simpleName}"
+                }
+            }
+            videoRecordingJob = null
+        }
+    }
+
+    fun probeTvStreams() {
+        val ip = currentTvIp().trim()
+        if (ip.isBlank()) {
+            streamProbeStatus = "Connect a TV before probing streams."
+            openConnectDialog()
+            return
+        }
+        if (isProbingStreams) return
+        isProbingStreams = true
+        streamProbeStatus = "Probing TV stream services..."
+        coroutineScope.launch {
+            runCatching { probeTvStreamServices(ip) }
+                .onSuccess { results ->
+                    streamProbeStatus = formatStreamProbeSummary(results)
+                }
+                .onFailure { error ->
+                    streamProbeStatus = "TV stream probe failed: ${error.message ?: error::class.java.simpleName}"
+                }
+            isProbingStreams = false
+        }
+    }
+
     fun sendRemoteButton(label: String, keyCode: Int) {
         if (testMode) {
             remoteStatus = "Test remote sent $label."
@@ -577,6 +836,29 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         )
     }
 
+    if (showVideoCaptureDialog) {
+        VideoCaptureDialog(
+            state = videoCaptureState,
+            onStart = { startVideoRecording() },
+            onStop = { stopVideoRecording() },
+            onTrimStartChange = { videoCaptureState = videoCaptureState.copy(trimStartText = it, activeTrimHandle = VideoTrimHandle.START) },
+            onTrimEndChange = { videoCaptureState = videoCaptureState.copy(trimEndText = it, activeTrimHandle = VideoTrimHandle.END) },
+            onActiveTrimHandleChange = { videoCaptureState = videoCaptureState.copy(activeTrimHandle = it) },
+            onAudioToggle = { toggleVideoAudio() },
+            onSaveEdited = { saveEditedVideoCapture(videoCaptureState.trimStartText, videoCaptureState.trimEndText) },
+            onKeepOriginal = { keepVideoCapture() },
+            onDiscard = { discardVideoCapture() },
+            onDismiss = {
+                when (videoCaptureState.phase) {
+                    VideoCapturePhase.RECORDING -> stopVideoRecording()
+                    VideoCapturePhase.REVIEW -> discardVideoCapture()
+                    VideoCapturePhase.SAVING -> Unit
+                    VideoCapturePhase.READY -> showVideoCaptureDialog = false
+                }
+            }
+        )
+    }
+
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = settingsDrawerState,
@@ -617,34 +899,32 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             MediaActionTile(
-                                title = "Capture TV",
+                                title = "Capture Photo",
                                 subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
                                 enabled = !isCapturingTcl,
-                                modifier = Modifier.weight(1f).testTag("action_capture_tv"),
+                                modifier = Modifier.weight(1f).testTag("action_capture_photo"),
                                 onClick = { captureTv() }
                             )
                             MediaActionTile(
-                                title = "Cast Photo",
-                                subtitle = "Gallery",
-                                modifier = Modifier.weight(1f).testTag("action_cast_photo"),
-                                onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
+                                title = "Capture Video",
+                                subtitle = "Video",
+                                modifier = Modifier.weight(1f).testTag("action_capture_video"),
+                                onClick = { openVideoCaptureDialog() }
                             )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            MediaActionTile(
-                                title = "Cast Video",
-                                subtitle = "Media",
-                                modifier = Modifier.weight(1f).testTag("action_cast_video"),
-                                onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
-                            )
-                            MediaActionTile(
-                                title = "Cast Music",
-                                subtitle = "Audio",
-                                modifier = Modifier.weight(1f).testTag("action_cast_music"),
-                                onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
+                            CastDropdownTile(
+                                modifier = Modifier.weight(1f),
+                                onPhotoClick = {
+                                    selectedGalleryTab = "Photos"
+                                    galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here."
+                                },
+                                onVideoClick = {
+                                    selectedGalleryTab = "Videos"
+                                    galleryStatus = "Video casting is not configured in this standalone build."
+                                },
+                                onMusicClick = {
+                                    selectedGalleryTab = "Music"
+                                    galleryStatus = "Music casting is not configured in this standalone build."
+                                }
                             )
                         }
 
@@ -652,7 +932,10 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             ActivityStatusPanel(
                                 tclStatus = tclStatus,
                                 galleryStatus = galleryStatus,
-                                remoteStatus = remoteStatus
+                                remoteStatus = remoteStatus,
+                                streamProbeStatus = streamProbeStatus,
+                                isProbingStreams = isProbingStreams,
+                                onProbeStreams = { probeTvStreams() }
                             )
                         }
 
@@ -665,7 +948,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             onRefresh = { refreshGallery() },
                             onOpen = { file ->
                                 selectedScreenshot = file
-                                galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                galleryBitmap = loadCapturePreview(file)
                                 galleryStatus = "Opened ${file.name}."
                             },
                             onShare = { file ->
@@ -725,7 +1008,7 @@ private fun SettingsDrawer(
             .fillMaxHeight()
             .width(320.dp)
             .testTag("settings_drawer"),
-        drawerShape = RoundedCornerShape(0.dp),
+        drawerShape = RectangleShape,
         drawerContainerColor = PanelColor,
         drawerContentColor = Color.White
     ) {
@@ -778,12 +1061,14 @@ private fun MediaActionTile(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Card(
+    Surface(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(112.dp),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(20.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
@@ -794,7 +1079,7 @@ private fun MediaActionTile(
             Box(
                 modifier = Modifier
                     .size(34.dp)
-                    .background(AccentColor.copy(alpha = 0.18f), RoundedCornerShape(12.dp)),
+                    .background(AccentColor.copy(alpha = 0.18f), RectangleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(title.take(1), color = AccentColor, fontWeight = FontWeight.Bold)
@@ -808,21 +1093,81 @@ private fun MediaActionTile(
 }
 
 @Composable
+private fun CastDropdownTile(
+    modifier: Modifier = Modifier,
+    onPhotoClick: () -> Unit,
+    onVideoClick: () -> Unit,
+    onMusicClick: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        MediaActionTile(
+            title = "Cast...",
+            subtitle = "Photo • Video • Music",
+            modifier = Modifier.fillMaxWidth().testTag("action_cast_menu"),
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.testTag("cast_options_menu")
+        ) {
+            DropdownMenuItem(
+                modifier = Modifier.testTag("cast_option_photo"),
+                text = { Text("Photo") },
+                onClick = {
+                    expanded = false
+                    onPhotoClick()
+                }
+            )
+            DropdownMenuItem(
+                modifier = Modifier.testTag("cast_option_video"),
+                text = { Text("Video") },
+                onClick = {
+                    expanded = false
+                    onVideoClick()
+                }
+            )
+            DropdownMenuItem(
+                modifier = Modifier.testTag("cast_option_music"),
+                text = { Text("Music") },
+                onClick = {
+                    expanded = false
+                    onMusicClick()
+                }
+            )
+        }
+    }
+}
+
+@Composable
 private fun ActivityStatusPanel(
     tclStatus: String,
     galleryStatus: String,
-    remoteStatus: String
+    remoteStatus: String,
+    streamProbeStatus: String,
+    isProbingStreams: Boolean,
+    onProbeStreams: () -> Unit
 ) {
-    Card(
+    Surface(
         modifier = Modifier.testTag("status_panel"),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(22.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Activity", fontWeight = FontWeight.Bold, color = MutedText)
             Text(tclStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(galleryStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
             Text(remoteStatus, style = MaterialTheme.typography.bodySmall, color = MutedText)
+            Text("TV stream probe", fontWeight = FontWeight.Bold, color = MutedText)
+            Text(streamProbeStatus, modifier = Modifier.testTag("stream_probe_status"), style = MaterialTheme.typography.bodySmall, color = MutedText)
+            TextButton(
+                modifier = Modifier.testTag("stream_probe_button"),
+                enabled = !isProbingStreams,
+                onClick = onProbeStreams
+            ) { Text(if (isProbingStreams) "Probing..." else "Find TV streams") }
         }
     }
 }
@@ -856,10 +1201,12 @@ private fun GallerySection(
         )
     }
 
-    Card(
+    Surface(
         modifier = Modifier.testTag("gallery_section"),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(24.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -884,7 +1231,7 @@ private fun GallerySection(
                         .fillMaxWidth()
                         .testTag("selected_capture_preview")
                         .height(190.dp)
-                        .background(AppBackground, RoundedCornerShape(18.dp))
+                        .background(Color.Transparent, RectangleShape)
                 )
             }
             if (selectedScreenshot != null) {
@@ -898,10 +1245,10 @@ private fun GallerySection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(160.dp)
-                        .background(AppBackground, RoundedCornerShape(20.dp)),
+                        .background(Color.Transparent, RectangleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Capture TV to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
+                    Text("Capture photo to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -984,13 +1331,15 @@ private fun GalleryStripItem(
     selected: Boolean,
     onOpen: (File) -> Unit
 ) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
-    Card(
+    val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
+    Surface(
         modifier = Modifier
             .width(154.dp)
             .testTag("gallery_item"),
-        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
-        shape = RoundedCornerShape(18.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(
@@ -999,7 +1348,7 @@ private fun GalleryStripItem(
                     .testTag("gallery_item_preview")
                     .height(86.dp)
                     .clickable { onOpen(file) }
-                    .background(Color.Black, RoundedCornerShape(14.dp)),
+                    .background(Color.Black, RectangleShape),
                 contentAlignment = Alignment.Center
             ) {
                 if (bitmap != null) {
@@ -1027,11 +1376,13 @@ private fun GalleryPaneItem(
     onShare: (File) -> Unit,
     onDelete: (File) -> Unit
 ) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
-    Card(
+    val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
+    Surface(
         modifier = Modifier.testTag("gallery_pane_item"),
-        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
-        shape = RoundedCornerShape(18.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -1041,7 +1392,7 @@ private fun GalleryPaneItem(
             Box(
                 modifier = Modifier
                     .size(82.dp)
-                    .background(Color.Black, RoundedCornerShape(14.dp))
+                    .background(Color.Black, RectangleShape)
                     .clickable { onOpen(file) },
                 contentAlignment = Alignment.Center
             ) {
@@ -1108,7 +1459,7 @@ private fun BottomMediaBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(74.dp)
-                .background(PanelColor)
+                .background(Color.Transparent)
                 .padding(horizontal = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1118,7 +1469,7 @@ private fun BottomMediaBar(
                 modifier = Modifier.testTag("bottom_remote_button"),
                 onClick = onRemoteClick,
                 colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
-                shape = RoundedCornerShape(28.dp),
+                shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
             ) { Text("Remote", fontWeight = FontWeight.Bold) }
             TextButton(
@@ -1173,7 +1524,7 @@ private fun SearchingTvIcon(isSearching: Boolean) {
                 .size(haloSize)
                 .alpha(haloAlpha)
                 .testTag("connect_tv_halo"),
-            shape = CircleShape,
+            shape = RectangleShape,
             color = AccentColor,
             content = {}
         )
@@ -1218,7 +1569,13 @@ private fun ConnectTvDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 val searchingLabel = rememberSearchingLabel(isDiscovering)
-                Card(colors = CardDefaults.cardColors(containerColor = AccentColor.copy(alpha = 0.18f))) {
+                Surface(
+                    modifier = Modifier,
+                    color = Color.Transparent,
+                    shape = RectangleShape,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1258,12 +1615,15 @@ private fun ConnectTvDialog(
 
                 discoveredDevices.forEach { device ->
                     val isSelected = selectedDevice?.ip == device.ip
-                    Card(
+                    Surface(
                         onClick = { onUseDevice(device) },
-                        modifier = Modifier.fillMaxWidth().testTag("discovered_device_card"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) AccentColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("discovered_device_card"),
+                        color = Color.Transparent,
+                        shape = RectangleShape,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -1323,6 +1683,173 @@ private fun ConnectTvDialog(
                         Text(handshake, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                 }
+            }
+        }
+    )
+}
+
+@Composable
+private fun VideoCaptureDialog(
+    state: VideoCaptureUiState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onTrimStartChange: (String) -> Unit,
+    onTrimEndChange: (String) -> Unit,
+    onActiveTrimHandleChange: (VideoTrimHandle) -> Unit,
+    onAudioToggle: () -> Unit,
+    onSaveEdited: () -> Unit,
+    onKeepOriginal: () -> Unit,
+    onDiscard: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.testTag("video_capture_dialog"),
+        title = { Text("Capture Video") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp)
+                        .background(Color.Black, RectangleShape)
+                        .border(1.dp, AccentColor.copy(alpha = 0.45f), RectangleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val displayFrame = state.editorPreviewFrame()
+                    displayFrame?.let { frame ->
+                        Image(
+                            bitmap = frame.asImageBitmap(),
+                            contentDescription = "Video recording preview",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize().testTag("video_preview_frame")
+                        )
+                    }
+                    if (state.phase != VideoCapturePhase.RECORDING) {
+                        Text("▶", color = Color.White, fontSize = 58.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(12.dp)
+                            .testTag("video_audio_toggle_button"),
+                        onClick = onAudioToggle,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.16f)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(if (state.includeAudio) "🔊" else "🔇", color = Color.White)
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.62f))
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            "${formatDurationMs(state.elapsedMs)} • ${state.frameCount} frame(s)",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                }
+                Text(state.status, color = MutedText, style = MaterialTheme.typography.bodySmall)
+                Text(state.audioStatus, color = MutedText, style = MaterialTheme.typography.bodySmall)
+                if (state.timelineFrames.isNotEmpty()) {
+                    if (state.phase == VideoCapturePhase.REVIEW || state.phase == VideoCapturePhase.SAVING) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                modifier = Modifier.testTag("video_trim_start_handle"),
+                                onClick = { onActiveTrimHandleChange(VideoTrimHandle.START) },
+                                colors = ButtonDefaults.textButtonColors(
+                                    containerColor = if (state.activeTrimHandle == VideoTrimHandle.START) AccentColor else AppBackground
+                                )
+                            ) { Text("Start") }
+                            TextButton(
+                                modifier = Modifier.testTag("video_trim_end_handle"),
+                                onClick = { onActiveTrimHandleChange(VideoTrimHandle.END) },
+                                colors = ButtonDefaults.textButtonColors(
+                                    containerColor = if (state.activeTrimHandle == VideoTrimHandle.END) AccentColor else AppBackground
+                                )
+                            ) { Text("End") }
+                            Text(state.activeTrimLabel(), color = MutedText, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Slider(
+                            modifier = Modifier.testTag("video_trim_seek_slider"),
+                            value = state.activeTrimSeconds(),
+                            onValueChange = { value ->
+                                val text = "%.1f".format(Locale.US, value)
+                                if (state.activeTrimHandle == VideoTrimHandle.START) onTrimStartChange(text) else onTrimEndChange(text)
+                            },
+                            valueRange = 0f..state.durationSeconds().coerceAtLeast(0.1f)
+                        )
+                    }
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(72.dp)
+                            .testTag("video_timeline_strip")
+                            .border(2.dp, Color.White, RectangleShape),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp)
+                    ) {
+                        items(state.timelineFrames) { frame ->
+                            Image(
+                                bitmap = frame.asImageBitmap(),
+                                contentDescription = "Video timeline frame",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.width(80.dp).fillMaxHeight()
+                            )
+                        }
+                    }
+                }
+                if (state.phase == VideoCapturePhase.REVIEW || state.phase == VideoCapturePhase.SAVING) {
+                    Text("Review and edit", fontWeight = FontWeight.Bold)
+                    Text(
+                        state.file?.let { "${it.name} • ${formatFileSize(it.length())}" }.orEmpty(),
+                        color = MutedText,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = state.trimStartText,
+                            onValueChange = onTrimStartChange,
+                            label = { Text("Start s") },
+                            enabled = state.phase != VideoCapturePhase.SAVING,
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("video_trim_start_field")
+                        )
+                        OutlinedTextField(
+                            value = state.trimEndText,
+                            onValueChange = onTrimEndChange,
+                            label = { Text("End s") },
+                            enabled = state.phase != VideoCapturePhase.SAVING,
+                            singleLine = true,
+                            modifier = Modifier.weight(1f).testTag("video_trim_end_field")
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when (state.phase) {
+                VideoCapturePhase.READY -> Button(modifier = Modifier.testTag("video_record_start_button"), onClick = onStart) { Text("Record") }
+                VideoCapturePhase.RECORDING -> Button(modifier = Modifier.testTag("video_record_stop_button"), onClick = onStop) { Text("Stop") }
+                VideoCapturePhase.REVIEW -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(modifier = Modifier.testTag("video_keep_original_button"), onClick = onKeepOriginal) { Text("Keep") }
+                    Button(modifier = Modifier.testTag("video_save_edit_button"), onClick = onSaveEdited) { Text("Save edit") }
+                }
+                VideoCapturePhase.SAVING -> TextButton(enabled = false, onClick = {}) { Text("Saving") }
+            }
+        },
+        dismissButton = {
+            when (state.phase) {
+                VideoCapturePhase.RECORDING, VideoCapturePhase.REVIEW -> {
+                    TextButton(modifier = Modifier.testTag("video_record_cancel_button"), onClick = onDiscard) { Text("Discard") }
+                }
+                VideoCapturePhase.READY -> TextButton(modifier = Modifier.testTag("video_dialog_close_button"), onClick = onDismiss) { Text("Close") }
+                VideoCapturePhase.SAVING -> TextButton(enabled = false, onClick = {}) { Text("Discard") }
             }
         }
     )
@@ -1440,6 +1967,80 @@ private data class Tcl6553ScreenshotResult(
     val log: String,
     val timingSummary: String = ""
 )
+
+private data class Tcl6553ScreenshotBytes(
+    val bytes: ByteArray,
+    val url: String,
+    val log: String,
+    val timingSummary: String = ""
+)
+
+private data class VideoCaptureResult(
+    val file: File,
+    val durationMs: Long,
+    val frameCount: Int
+)
+
+private enum class VideoCapturePhase {
+    READY,
+    RECORDING,
+    REVIEW,
+    SAVING
+}
+
+private enum class VideoTrimHandle {
+    START,
+    END
+}
+
+private data class VideoCaptureUiState(
+    val phase: VideoCapturePhase = VideoCapturePhase.READY,
+    val startedAtMillis: Long = 0L,
+    val elapsedMs: Long = 0L,
+    val frameCount: Int = 0,
+    val status: String = "Ready to record TV video.",
+    val file: File? = null,
+    val durationMs: Long = 0L,
+    val trimStartText: String = "0.0",
+    val trimEndText: String = "0.0",
+    val includeAudio: Boolean = false,
+    val audioFile: File? = null,
+    val audioStatus: String = "TV audio stream unavailable",
+    val activeTrimHandle: VideoTrimHandle = VideoTrimHandle.END,
+    val previewFrame: Bitmap? = null,
+    val timelineFrames: List<Bitmap> = emptyList()
+)
+
+private fun VideoCaptureUiState.editorPreviewFrame(): Bitmap? {
+    if (timelineFrames.isEmpty()) return previewFrame
+    if (phase != VideoCapturePhase.REVIEW && phase != VideoCapturePhase.SAVING) return previewFrame ?: timelineFrames.lastOrNull()
+    val duration = durationSeconds().coerceAtLeast(0.1f)
+    val fraction = (activeTrimSeconds() / duration).coerceIn(0f, 1f)
+    val index = (fraction * (timelineFrames.lastIndex.coerceAtLeast(0))).toInt().coerceIn(timelineFrames.indices)
+    return timelineFrames[index]
+}
+
+private fun VideoCaptureUiState.durationSeconds(): Float = (durationMs.coerceAtLeast(elapsedMs) / 1_000f).coerceAtLeast(0.1f)
+
+private fun VideoCaptureUiState.activeTrimSeconds(): Float = when (activeTrimHandle) {
+    VideoTrimHandle.START -> trimStartText.toFloatOrNull() ?: 0f
+    VideoTrimHandle.END -> trimEndText.toFloatOrNull() ?: durationSeconds()
+}.coerceIn(0f, durationSeconds())
+
+private fun VideoCaptureUiState.activeTrimLabel(): String = when (activeTrimHandle) {
+    VideoTrimHandle.START -> "Previewing start at ${trimStartText.ifBlank { "0.0" }}s"
+    VideoTrimHandle.END -> "Previewing end at ${trimEndText.ifBlank { formatSecondsText(durationMs) }}s"
+}
+
+private fun VideoCaptureUiState.withPreviewFrame(frame: Bitmap): VideoCaptureUiState {
+    val preview = frame.copy(Bitmap.Config.ARGB_8888, false)
+    val nextTimeline = if (timelineFrames.size < 12 || frameCount % 3 == 0) {
+        (timelineFrames + Bitmap.createScaledBitmap(frame, 96, 54, true)).takeLast(16)
+    } else {
+        timelineFrames
+    }
+    return copy(previewFrame = preview, timelineFrames = nextTimeline)
+}
 
 private data class TclCaptureTimingSegment(
     val label: String,
@@ -1639,7 +2240,7 @@ private fun TclDiscoveryDevice.toSelectedDevice(verifiedAtMillis: Long = System.
 private fun loadScreenshotFiles(context: Context): List<File> {
     val directory = screenshotDirectory(context)
     return directory.listFiles()
-        ?.filter { file -> file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "bin") }
+        ?.filter { file -> file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "bin", "mp4") }
         ?.sortedByDescending { it.lastModified() }
         .orEmpty()
 }
@@ -1647,11 +2248,42 @@ private fun loadScreenshotFiles(context: Context): List<File> {
 private fun shareScreenshot(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = imageMimeType(file)
+        type = captureMimeType(file)
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "Share screenshot"))
+    context.startActivity(Intent.createChooser(intent, "Share capture"))
+}
+
+private suspend fun exportVideoToMovies(context: Context, file: File): Uri = withContext(Dispatchers.IO) {
+    val resolver = context.contentResolver
+    val nowMillis = System.currentTimeMillis()
+    val values = ContentValues().apply {
+        put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
+        put(MediaStore.Video.Media.TITLE, file.nameWithoutExtension)
+        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+        put(MediaStore.Video.Media.DATE_TAKEN, nowMillis)
+        put(MediaStore.Video.Media.DATE_ADDED, nowMillis / 1_000L)
+        put(MediaStore.Video.Media.DATE_MODIFIED, nowMillis / 1_000L)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/TCL TV Screenshot")
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+    }
+    val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+        ?: error("Could not create Movies export entry")
+    runCatching {
+        resolver.openOutputStream(uri)?.use { output -> file.inputStream().use { input -> input.copyTo(output) } }
+            ?: error("Could not open Movies export stream")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val completeValues = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
+            resolver.update(uri, completeValues, null, null)
+        }
+    }.onFailure { error ->
+        resolver.delete(uri, null, null)
+        throw error
+    }
+    uri
 }
 
 private suspend fun exportScreenshotToPictures(context: Context, file: File): Uri = withContext(Dispatchers.IO) {
@@ -1691,7 +2323,27 @@ private fun imageMimeType(file: File): String = when (file.extension.lowercase()
     else -> "application/octet-stream"
 }
 
+private fun captureMimeType(file: File): String = when (file.extension.lowercase()) {
+    "mp4" -> "video/mp4"
+    else -> imageMimeType(file)
+}
+
+private fun loadCapturePreview(file: File): Bitmap? {
+    if (file.extension.lowercase() != "mp4") return BitmapFactory.decodeFile(file.absolutePath)
+    return runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } finally {
+            retriever.release()
+        }
+    }.getOrNull()
+}
+
 private fun screenshotDirectory(context: Context): File = File(context.filesDir, "Screenshots")
+
+private fun videoDraftDirectory(context: Context): File = File(context.cacheDir, "VideoDrafts")
 
 private fun captureFilename(nowMillis: Long, extension: String): String {
     val safeExtension = extension.lowercase().ifBlank { "bin" }
@@ -1712,6 +2364,56 @@ private fun uniqueCaptureFile(directory: File, nowMillis: Long, extension: Strin
         suffix++
     }
 }
+
+private fun videoCaptureFilename(nowMillis: Long, suffix: String? = null): String {
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    val suffixPart = suffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
+    return "tcl-tv-video_${timestamp}$suffixPart.mp4"
+}
+
+private fun audioCaptureFilename(nowMillis: Long, suffix: String? = null): String {
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    val suffixPart = suffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
+    return "tcl-tv-audio_${timestamp}$suffixPart.m4a"
+}
+
+private fun uniqueAudioCaptureFile(directory: File, nowMillis: Long, suffix: String? = null): File {
+    directory.mkdirs()
+    val first = File(directory, audioCaptureFilename(nowMillis, suffix))
+    if (!first.exists()) return first
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    val suffixPart = suffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
+    var index = 2
+    while (true) {
+        val candidate = File(directory, "tcl-tv-audio_${timestamp}${suffixPart}_$index.m4a")
+        if (!candidate.exists()) return candidate
+        index++
+    }
+}
+
+private fun moveCaptureFile(source: File, destination: File): File {
+    destination.parentFile?.mkdirs()
+    if (source.renameTo(destination)) return destination
+    source.inputStream().use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
+    source.delete()
+    return destination
+}
+
+private fun uniqueVideoCaptureFile(directory: File, nowMillis: Long, suffix: String? = null): File {
+    directory.mkdirs()
+    val first = File(directory, videoCaptureFilename(nowMillis, suffix))
+    if (!first.exists()) return first
+    val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
+    val suffixPart = suffix?.takeIf { it.isNotBlank() }?.let { "_$it" }.orEmpty()
+    var index = 2
+    while (true) {
+        val candidate = File(directory, "tcl-tv-video_${timestamp}${suffixPart}_$index.mp4")
+        if (!candidate.exists()) return candidate
+        index++
+    }
+}
+
+private fun formatSecondsText(durationMs: Long): String = "%.1f".format(Locale.US, durationMs / 1_000.0)
 
 private fun formatTimestamp(millis: Long): String {
     if (millis <= 0L) return "unknown"
@@ -1841,6 +2543,105 @@ private suspend fun discoverTclTvs(
     (verifiedUdpDevices + scanDevices)
         .distinctBy { it.ip }
         .sortedWith(compareBy<TclDiscoveryDevice> { it.source.startsWith("scan") }.thenBy { it.ip })
+}
+
+private data class TvStreamProbeTarget(
+    val port: Int,
+    val label: String,
+    val paths: List<String> = emptyList(),
+    val tls: Boolean = false
+)
+
+private data class TvStreamProbeResult(
+    val port: Int,
+    val label: String,
+    val reachable: Boolean,
+    val evidence: String
+)
+
+private fun tvStreamProbeTargets(): List<TvStreamProbeTarget> = listOf(
+    TvStreamProbeTarget(5555, "ADB/debug service"),
+    TvStreamProbeTarget(554, "RTSP", listOf("/", "/live", "/stream", "/video")),
+    TvStreamProbeTarget(6466, "TCL private SSL"),
+    TvStreamProbeTarget(6467, "TCL private SSL"),
+    TvStreamProbeTarget(6553, "TCL control/screenshot"),
+    TvStreamProbeTarget(8008, "Cast/DIAL HTTP", listOf("/setup/eureka_info", "/ssdp/device-desc.xml", "/apps", "/")),
+    TvStreamProbeTarget(8009, "Cast V2 TLS", tls = true),
+    TvStreamProbeTarget(8443, "HTTPS", listOf("/setup/eureka_info", "/ssdp/device-desc.xml", "/"), tls = true),
+    TvStreamProbeTarget(8554, "RTSP alternate", listOf("/", "/live", "/stream", "/video")),
+    TvStreamProbeTarget(9000, "private TLS", tls = true),
+    TvStreamProbeTarget(1900, "UPnP/SSDP TCP check"),
+    TvStreamProbeTarget(38463, "ephemeral HTTP", listOf("/", "/screenShot/tohsneercs.PNG")),
+    TvStreamProbeTarget(40647, "ephemeral HTTP", listOf("/", "/screenShot/tohsneercs.PNG"))
+)
+
+private suspend fun probeTvStreamServices(tvIp: String): List<TvStreamProbeResult> = withContext(Dispatchers.IO) {
+    tvStreamProbeTargets().map { target ->
+        async { probeTvStreamTarget(tvIp, target) }
+    }.awaitAll()
+}
+
+private fun probeTvStreamTarget(tvIp: String, target: TvStreamProbeTarget): TvStreamProbeResult {
+    val reachable = runCatching {
+        Socket().use { socket ->
+            socket.soTimeout = 1_000
+            socket.connect(InetSocketAddress(tvIp, target.port), 1_000)
+        }
+    }.isSuccess
+    if (!reachable) return TvStreamProbeResult(target.port, target.label, false, "closed")
+
+    val httpEvidence = target.paths.firstNotNullOfOrNull { path ->
+        probeHttpPath(tvIp, target.port, path)?.let { "$path $it" }
+    }
+    val evidence = when {
+        httpEvidence != null -> httpEvidence
+        target.tls -> "open TLS; no plain stream descriptor found"
+        target.label.contains("RTSP") -> "open; RTSP stream path not confirmed"
+        else -> "open"
+    }
+    return TvStreamProbeResult(target.port, target.label, true, evidence)
+}
+
+private fun probeHttpPath(tvIp: String, port: Int, path: String): String? = runCatching {
+    val connection = (URL("http://$tvIp:$port$path").openConnection() as HttpURLConnection).apply {
+        connectTimeout = 800
+        readTimeout = 800
+        requestMethod = "GET"
+        useCaches = false
+    }
+    try {
+        val code = connection.responseCode
+        val contentType = connection.contentType.orEmpty().ifBlank { "unknown" }
+        val sample = runCatching {
+            connection.inputStream.use { stream ->
+                stream.readBytesBounded(512).decodeToString().lineSequence().firstOrNull().orEmpty().take(80)
+            }
+        }.getOrDefault("")
+        "HTTP $code $contentType ${sample}".trim()
+    } finally {
+        connection.disconnect()
+    }
+}.getOrNull()
+
+private fun formatStreamProbeSummary(results: List<TvStreamProbeResult>): String {
+    val open = results.filter { it.reachable }
+    if (open.isEmpty()) return "No candidate TV stream services responded."
+    val streamLike = open.filter { result ->
+        result.evidence.contains("m3u8", ignoreCase = true) ||
+            result.evidence.contains("rtsp", ignoreCase = true) ||
+            result.evidence.contains("video", ignoreCase = true) ||
+            result.evidence.contains("audio", ignoreCase = true) ||
+            result.evidence.contains("Cast", ignoreCase = true)
+    }
+    val rows = open.joinToString("\n") { result ->
+        "${result.port} ${result.label}: ${result.evidence.take(110)}"
+    }
+    val header = if (streamLike.isEmpty()) {
+        "Open services found, but no confirmed AV stream endpoint yet."
+    } else {
+        "Possible stream-related services found."
+    }
+    return "$header\n$rows"
 }
 
 private fun bindDiscoverySocket(): DatagramSocket {
@@ -2215,6 +3016,19 @@ private suspend fun captureTcl6553Screenshot(
     imageDirectory: File,
     sessionManager: Tcl6553SessionManager? = null
 ): Tcl6553ScreenshotResult = withContext(Dispatchers.IO) {
+    val result = captureTcl6553ScreenshotBytes(tvIp, port, phoneName, uuid, phoneImei, sessionManager)
+    val log = StringBuilder(result.log)
+    saveTclScreenshotResult(result.url, result.bytes, imageDirectory, log, timingSummary = result.timingSummary)
+}
+
+private suspend fun captureTcl6553ScreenshotBytes(
+    tvIp: String,
+    port: Int,
+    phoneName: String,
+    uuid: String,
+    phoneImei: String,
+    sessionManager: Tcl6553SessionManager? = null
+): Tcl6553ScreenshotBytes = withContext(Dispatchers.IO) {
     val log = StringBuilder()
     val trace = TclCaptureTrace()
     sessionManager?.captureScreenshotUrl(log)?.let { url ->
@@ -2222,9 +3036,7 @@ private suspend fun captureTcl6553Screenshot(
         log.protocolLog("download warm url $url")
         runCatching {
             val bytes = downloadScreenshotWithRetries(url, log, trace, allowPortScan = false)
-            saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
-        }.onSuccess { result ->
-            return@withContext result
+            return@withContext Tcl6553ScreenshotBytes(bytes, url, log.toString().trim(), trace.summary())
         }.onFailure { error ->
             log.protocolLog("warm download failed; retrying with cold capture: ${error.message ?: error::class.java.simpleName}")
             trace.mark("Warm download failed")
@@ -2282,7 +3094,7 @@ private suspend fun captureTcl6553Screenshot(
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
         val bytes = downloadScreenshotWithRetries(url, log, trace)
-        saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
+        Tcl6553ScreenshotBytes(bytes, url, log.toString().trim(), trace.summary())
     }
 }
 
@@ -2378,7 +3190,8 @@ private fun saveTclScreenshotResult(
     imageBytes: ByteArray,
     imageDirectory: File,
     log: StringBuilder,
-    trace: TclCaptureTrace? = null
+    trace: TclCaptureTrace? = null,
+    timingSummary: String? = null
 ): Tcl6553ScreenshotResult {
     val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
@@ -2398,8 +3211,287 @@ private fun saveTclScreenshotResult(
         file = file,
         url = url,
         log = log.toString().trim(),
-        timingSummary = trace?.summary().orEmpty()
+        timingSummary = timingSummary ?: trace?.summary().orEmpty()
     )
+}
+
+private suspend fun recordTcl6553Video(
+    tvIp: String,
+    port: Int,
+    phoneName: String,
+    uuid: String,
+    phoneImei: String,
+    outputFile: File,
+    sessionManager: Tcl6553SessionManager,
+    isActive: () -> Boolean,
+    onProgress: (Int, Long) -> Unit,
+    onPreviewFrame: (Bitmap) -> Unit
+): VideoCaptureResult = withContext(Dispatchers.IO) {
+    val startedAt = System.currentTimeMillis()
+    var recorder: Mp4FrameRecorder? = null
+    var frameCount = 0
+    try {
+        while (isActive() && System.currentTimeMillis() - startedAt < VIDEO_CAPTURE_MAX_DURATION_MS) {
+            val frameStartedAt = System.currentTimeMillis()
+            val capture = captureTcl6553ScreenshotBytes(tvIp, port, phoneName, uuid, phoneImei, sessionManager)
+            val bitmap = BitmapFactory.decodeByteArray(capture.bytes, 0, capture.bytes.size)
+                ?: error("TV frame could not be decoded")
+            if (recorder == null) {
+                recorder = Mp4FrameRecorder(
+                    outputFile = outputFile,
+                    width = evenVideoDimension(bitmap.width),
+                    height = evenVideoDimension(bitmap.height),
+                    frameRate = VIDEO_CAPTURE_FRAME_RATE,
+                    bitRate = VIDEO_CAPTURE_BIT_RATE
+                )
+            }
+            recorder?.writeFrame(bitmap)
+            frameCount += 1
+            onPreviewFrame(bitmap)
+            onProgress(frameCount, System.currentTimeMillis() - startedAt)
+            val waitMs = VIDEO_CAPTURE_TARGET_FRAME_INTERVAL_MS - (System.currentTimeMillis() - frameStartedAt)
+            if (waitMs > 0L) delay(waitMs)
+        }
+        val finalRecorder = recorder ?: error("No video frames captured")
+        val durationMs = finalRecorder.finish()
+            .coerceAtLeast(System.currentTimeMillis() - startedAt)
+        VideoCaptureResult(outputFile, durationMs, frameCount)
+    } catch (error: Throwable) {
+        runCatching { recorder?.finish() }
+        if (error is CancellationException && frameCount > 0 && outputFile.exists()) {
+            VideoCaptureResult(outputFile, videoDurationMs(outputFile).takeIf { it > 0L } ?: (System.currentTimeMillis() - startedAt), frameCount)
+        } else {
+            throw error
+        }
+    } finally {
+        recorder?.releaseQuietly()
+    }
+}
+
+private suspend fun recordTestTvVideo(
+    outputFile: File,
+    onProgress: (Int, Long) -> Unit,
+    onPreviewFrame: (Bitmap) -> Unit
+): VideoCaptureResult = withContext(Dispatchers.IO) {
+    val startedAt = System.currentTimeMillis()
+    val recorder = Mp4FrameRecorder(outputFile, width = 320, height = 180, frameRate = VIDEO_CAPTURE_FRAME_RATE, bitRate = 1_200_000)
+    try {
+        repeat(10) { index ->
+            val bitmap = Bitmap.createBitmap(320, 180, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(AndroidColor.rgb(20 + index * 8, 30, 70 + index * 10))
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = AndroidColor.WHITE
+                textSize = 34f
+            }
+            canvas.drawText("Test recording ${index + 1}", 28f, 96f, paint)
+            recorder.writeFrame(bitmap)
+            onPreviewFrame(bitmap)
+            onProgress(index + 1, System.currentTimeMillis() - startedAt)
+            delay(90)
+        }
+        VideoCaptureResult(outputFile, recorder.finish(), 10)
+    } finally {
+        recorder.releaseQuietly()
+    }
+}
+
+private class Mp4FrameRecorder(
+    private val outputFile: File,
+    private val width: Int,
+    private val height: Int,
+    frameRate: Int,
+    bitRate: Int
+) {
+    private val bufferInfo = MediaCodec.BufferInfo()
+    private val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+    private val muxer: MediaMuxer
+    private val inputSurface: android.view.Surface
+    private var muxerStarted = false
+    private var trackIndex = -1
+    private var finished = false
+    private val startedAt = System.currentTimeMillis()
+
+    init {
+        outputFile.parentFile?.mkdirs()
+        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+            setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
+            setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+        }
+        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        inputSurface = encoder.createInputSurface()
+        muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        encoder.start()
+    }
+
+    fun writeFrame(bitmap: Bitmap) {
+        check(!finished) { "Recorder already finished" }
+        drainEncoder(endOfStream = false)
+        val canvas = inputSurface.lockCanvas(null)
+        try {
+            drawBitmapLetterboxed(canvas, bitmap, width, height)
+        } finally {
+            inputSurface.unlockCanvasAndPost(canvas)
+        }
+    }
+
+    fun finish(): Long {
+        if (finished) return videoDurationMs(outputFile)
+        finished = true
+        encoder.signalEndOfInputStream()
+        drainEncoder(endOfStream = true)
+        releaseQuietly()
+        return videoDurationMs(outputFile).takeIf { it > 0L } ?: (System.currentTimeMillis() - startedAt)
+    }
+
+    private fun drainEncoder(endOfStream: Boolean) {
+        while (true) {
+            val encoderStatus = encoder.dequeueOutputBuffer(bufferInfo, if (endOfStream) 10_000L else 0L)
+            when {
+                encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER -> {
+                    if (!endOfStream) return
+                }
+                encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    check(!muxerStarted) { "Encoder format changed twice" }
+                    trackIndex = muxer.addTrack(encoder.outputFormat)
+                    muxer.start()
+                    muxerStarted = true
+                }
+                encoderStatus >= 0 -> {
+                    val encodedData = encoder.getOutputBuffer(encoderStatus) ?: error("Encoder output buffer unavailable")
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                        bufferInfo.size = 0
+                    }
+                    if (bufferInfo.size > 0) {
+                        check(muxerStarted) { "Muxer has not started" }
+                        encodedData.position(bufferInfo.offset)
+                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                        muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                    }
+                    val end = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                    encoder.releaseOutputBuffer(encoderStatus, false)
+                    if (end) return
+                }
+            }
+        }
+    }
+
+    fun releaseQuietly() {
+        runCatching { inputSurface.release() }
+        runCatching { encoder.stop() }
+        runCatching { encoder.release() }
+        runCatching { if (muxerStarted) muxer.stop() }
+        runCatching { muxer.release() }
+    }
+}
+
+private fun drawBitmapLetterboxed(canvas: Canvas, bitmap: Bitmap, width: Int, height: Int) {
+    canvas.drawColor(AndroidColor.BLACK)
+    val scale = minOf(width / bitmap.width.toFloat(), height / bitmap.height.toFloat())
+    val drawWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+    val drawHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+    val left = (width - drawWidth) / 2
+    val top = (height - drawHeight) / 2
+    canvas.drawBitmap(bitmap, null, Rect(left, top, left + drawWidth, top + drawHeight), null)
+}
+
+private fun evenVideoDimension(value: Int): Int = value.coerceAtLeast(2).let { if (it % 2 == 0) it else it - 1 }
+
+private fun videoDurationMs(file: File): Long = runCatching {
+    val retriever = MediaMetadataRetriever()
+    try {
+        retriever.setDataSource(file.absolutePath)
+        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+    } finally {
+        retriever.release()
+    }
+}.getOrDefault(0L)
+
+private fun trimMp4Video(inputFile: File, outputFile: File, startMs: Long, endMs: Long): File =
+    muxVideoAndOptionalAudio(inputFile, audioFile = null, outputFile, startMs, endMs, includeAudio = false)
+
+private fun muxVideoAndOptionalAudio(
+    videoFile: File,
+    audioFile: File?,
+    outputFile: File,
+    startMs: Long,
+    endMs: Long,
+    includeAudio: Boolean
+): File {
+    require(videoFile.exists()) { "Source video is missing" }
+    val safeEndMs = endMs.takeIf { it > startMs } ?: videoDurationMs(videoFile).coerceAtLeast(startMs + 250L)
+    outputFile.parentFile?.mkdirs()
+    val videoExtractor = MediaExtractor()
+    val audioExtractor = if (includeAudio && audioFile?.exists() == true) MediaExtractor() else null
+    var muxer: MediaMuxer? = null
+    try {
+        videoExtractor.setDataSource(videoFile.absolutePath)
+        audioExtractor?.setDataSource(audioFile!!.absolutePath)
+        muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val videoTrack = selectFirstTrack(videoExtractor, "video/") ?: error("Source video has no video track")
+        val muxerVideoTrack = muxer.addTrack(videoExtractor.getTrackFormat(videoTrack))
+        val audioTrack = audioExtractor?.let { selectFirstTrack(it, "audio/") }
+        val muxerAudioTrack = if (audioExtractor != null && audioTrack != null) {
+            muxer.addTrack(audioExtractor.getTrackFormat(audioTrack))
+        } else {
+            -1
+        }
+        muxer.start()
+        copySelectedTrack(videoExtractor, muxer, muxerVideoTrack, startMs, safeEndMs)
+        if (audioExtractor != null && audioTrack != null && muxerAudioTrack >= 0) {
+            copySelectedTrack(audioExtractor, muxer, muxerAudioTrack, startMs, safeEndMs)
+        }
+    } finally {
+        videoExtractor.release()
+        audioExtractor?.release()
+        runCatching { muxer?.stop() }
+        runCatching { muxer?.release() }
+    }
+    return outputFile
+}
+
+private fun selectFirstTrack(extractor: MediaExtractor, mimePrefix: String): Int? {
+    for (track in 0 until extractor.trackCount) {
+        val mime = extractor.getTrackFormat(track).getString(MediaFormat.KEY_MIME).orEmpty()
+        if (mime.startsWith(mimePrefix)) {
+            extractor.selectTrack(track)
+            return track
+        }
+    }
+    return null
+}
+
+private fun copySelectedTrack(
+    extractor: MediaExtractor,
+    muxer: MediaMuxer,
+    muxerTrack: Int,
+    startMs: Long,
+    endMs: Long
+) {
+    val buffer = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
+    val info = MediaCodec.BufferInfo()
+    val startUs = startMs * 1_000L
+    val endUs = endMs * 1_000L
+    extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+    while (true) {
+        val track = extractor.sampleTrackIndex
+        if (track < 0) break
+        val sampleTime = extractor.sampleTime
+        if (sampleTime > endUs) break
+        buffer.clear()
+        val sampleSize = extractor.readSampleData(buffer, 0)
+        if (sampleSize < 0) break
+        val sampleFlags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) {
+            MediaCodec.BUFFER_FLAG_KEY_FRAME
+        } else {
+            0
+        }
+        info.set(0, sampleSize, (sampleTime - startUs).coerceAtLeast(0L), sampleFlags)
+        muxer.writeSampleData(muxerTrack, buffer, info)
+        extractor.advance()
+    }
 }
 
 private object ScreenshotPortCache {

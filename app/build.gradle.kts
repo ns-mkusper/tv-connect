@@ -36,6 +36,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests.all {
+            it.systemProperty("tvconnect.benchmarks", System.getProperty("tvconnect.benchmarks") ?: "false")
+        }
+    }
 }
 
 dependencies {

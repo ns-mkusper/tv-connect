@@ -33,3 +33,13 @@ jobs:
 
       - name: Build, lint, and run JVM tests
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tv-connect-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Run mock target benchmark tests
+        run: ./gradlew :app:testDebugUnitTest --tests "com.example.tlctvscreenshot.MockTargetBenchmarkTest" -Dtvconnect.benchmarks=true --stacktrace
