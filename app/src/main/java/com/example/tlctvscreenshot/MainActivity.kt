@@ -173,6 +173,9 @@ private const val VIDEO_CAPTURE_TARGET_FRAME_INTERVAL_MS = 550L
 private const val VIDEO_CAPTURE_MAX_DURATION_MS = 30_000L
 private const val VIDEO_CAPTURE_FRAME_RATE = 12
 private const val VIDEO_CAPTURE_BIT_RATE = 4_000_000
+private const val PLAYBACK_STREAM_PLAYLIST_REFRESH_MS = 750L
+private const val PLAYBACK_STREAM_MAX_PLAYLIST_BYTES = 2 * 1024 * 1024
+private const val PLAYBACK_STREAM_MAX_SEGMENT_BYTES = 64 * 1024 * 1024
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
 private const val LOG_TAG = "TlcTvCapture"
@@ -502,8 +505,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         showVideoCaptureDialog = true
         videoCaptureState = VideoCaptureUiState(
             includeAudio = false,
-            audioStatus = "TV audio stream unavailable",
-            status = "Ready to record TV video."
+            audioStatus = "Waiting for a confirmed TV playback stream.",
+            status = "Ready to look for a real TV playback stream."
         )
     }
 
@@ -612,15 +615,15 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
             startedAtMillis = startedAt,
             elapsedMs = 0L,
             frameCount = 0,
-            status = "Recording TV video...",
+            status = if (testMode) "Recording test video..." else "Looking for a real TV playback stream...",
             file = outputFile,
             audioFile = null,
             includeAudio = false,
-            audioStatus = "TV audio stream unavailable",
+            audioStatus = "Waiting for a confirmed TV playback stream.",
             previewFrame = null,
             timelineFrames = emptyList()
         )
-        tclStatus = "Recording TV video..."
+        tclStatus = if (testMode) "Recording test video..." else "Looking for a real TV playback stream..."
         videoRecordingJob = coroutineScope.launch {
             runCatching {
                 val result = if (testMode) {
@@ -638,24 +641,21 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                         }
                     )
                 } else {
-                    recordTcl6553Video(
-                        tvIp = ip,
-                        port = TCL_COMMAND_PORT,
-                        phoneName = tclPhoneName.ifBlank { Build.MODEL ?: "Android" },
-                        uuid = tclUuid.ifBlank { androidId },
-                        phoneImei = tclPhoneImei.ifBlank { tclUuid.ifBlank { androidId } },
+                    val streamResult = detectRealTvPlaybackStream(ip)
+                    if (!streamResult.confirmed || streamResult.url.isNullOrBlank()) {
+                        error(streamResult.message)
+                    }
+                    recordPlaybackStreamVideo(
+                        streamUrl = streamResult.url,
                         outputFile = outputFile,
-                        sessionManager = tclSessionManager,
                         isActive = { videoRecordingJob?.isActive == true },
-                        onProgress = { frameCount, elapsedMs ->
+                        onProgress = { segmentCount, elapsedMs ->
                             videoCaptureState = videoCaptureState.copy(
                                 elapsedMs = elapsedMs,
-                                frameCount = frameCount,
-                                status = "Recording: ${formatDurationMs(elapsedMs)} • $frameCount frames"
+                                frameCount = segmentCount,
+                                status = "Recording TV playback stream: ${formatDurationMs(elapsedMs)}",
+                                audioStatus = "Recording TV playback audio."
                             )
-                        },
-                        onPreviewFrame = { frame ->
-                            videoCaptureState = videoCaptureState.withPreviewFrame(frame)
                         }
                     )
                 }
@@ -670,8 +670,12 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     durationMs = result.durationMs,
                     trimStartText = "0.0",
                     trimEndText = formatSecondsText(result.durationMs),
-                    status = "Recorded ${formatDurationMs(result.durationMs)} with ${result.frameCount} frame(s). Review before saving.",
-                    audioStatus = "TV audio stream unavailable"
+                    status = if (testMode) {
+                        "Recorded ${formatDurationMs(result.durationMs)} with ${result.frameCount} frame(s). Review before saving."
+                    } else {
+                        "Recorded real TV playback stream in ${formatDurationMs(result.durationMs)}. Review before saving."
+                    },
+                    audioStatus = if (testMode) "Test video has no TV audio." else "TV playback audio captured."
                 )
                 tclStatus = "Recorded video in ${formatDurationMs(result.durationMs)}."
                 galleryStatus = "Review video, then keep or save an edit."
@@ -696,8 +700,12 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     galleryStatus = "Review video, then keep or save an edit."
                 } else {
                     outputFile.delete()
-                    videoCaptureState = VideoCaptureUiState(status = "Video recording failed: ${error.message ?: error::class.java.simpleName}")
-                    tclStatus = "Video recording failed: ${error.message ?: error::class.java.simpleName}"
+                    val message = error.message ?: error::class.java.simpleName
+                    videoCaptureState = VideoCaptureUiState(
+                        status = "Real TV playback recording unavailable: $message",
+                        audioStatus = "No confirmed TV audio stream."
+                    )
+                    tclStatus = "Real TV playback recording unavailable: $message"
                 }
             }
             videoRecordingJob = null
@@ -1984,6 +1992,16 @@ private data class VideoCaptureResult(
     val frameCount: Int
 )
 
+private data class PlaybackMediaSegment(
+    val url: String,
+    val durationMs: Long?
+)
+
+private data class DownloadedPlaybackSegment(
+    val file: File,
+    val durationMs: Long?
+)
+
 private enum class VideoCapturePhase {
     READY,
     RECORDING,
@@ -2562,6 +2580,21 @@ private data class TvStreamProbeResult(
     val evidence: String
 )
 
+private data class TvPlaybackStreamProbeResult(
+    val confirmed: Boolean,
+    val label: String,
+    val url: String? = null,
+    val message: String
+)
+
+private val ConfirmedPlaybackContentTypes = listOf(
+    "application/vnd.apple.mpegurl",
+    "application/x-mpegurl",
+    "video/mp2t",
+    "video/mp4",
+    "video/"
+)
+
 private fun tvStreamProbeTargets(): List<TvStreamProbeTarget> = listOf(
     TvStreamProbeTarget(5555, "ADB/debug service"),
     TvStreamProbeTarget(554, "RTSP", listOf("/", "/live", "/stream", "/video")),
@@ -2620,7 +2653,12 @@ private fun probeHttpPath(tvIp: String, port: Int, path: String): String? = runC
                 stream.readBytesBounded(512).decodeToString().lineSequence().firstOrNull().orEmpty().take(80)
             }
         }.getOrDefault("")
-        "HTTP $code $contentType ${sample}".trim()
+        val confirmed = if (code == 200 && ConfirmedPlaybackContentTypes.any { contentType.contains(it, ignoreCase = true) }) {
+            "confirmed-playback url=http://$tvIp:$port$path"
+        } else {
+            ""
+        }
+        "HTTP $code $contentType $confirmed ${sample}".trim()
     } finally {
         connection.disconnect()
     }
@@ -2646,6 +2684,45 @@ private fun formatStreamProbeSummary(results: List<TvStreamProbeResult>): String
     }
     return "$header\n$rows"
 }
+
+
+private suspend fun detectRealTvPlaybackStream(tvIp: String): TvPlaybackStreamProbeResult = withContext(Dispatchers.IO) {
+    val results = probeTvStreamServices(tvIp)
+    val confirmed = results.firstOrNull { it.evidence.isConfirmedPlaybackEvidence() }
+    if (confirmed != null) {
+        return@withContext TvPlaybackStreamProbeResult(
+            confirmed = true,
+            label = confirmed.label,
+            url = confirmed.evidence.confirmedPlaybackUrl(),
+            message = "Confirmed ${confirmed.label}: ${confirmed.evidence}"
+        )
+    }
+    val open = results.filter { it.reachable }
+    val openSummary = if (open.isEmpty()) {
+        "No TV stream services responded."
+    } else {
+        open.joinToString("; ") { "${it.port} ${it.label}: ${it.evidence.take(80)}" }
+    }
+    TvPlaybackStreamProbeResult(
+        confirmed = false,
+        label = "No confirmed TV playback stream",
+        message = "No generic TV playback video/audio stream was found. Open services: $openSummary"
+    )
+}
+
+private fun String.isConfirmedPlaybackEvidence(): Boolean =
+    contains("confirmed-playback", ignoreCase = true) ||
+        contains("application/vnd.apple.mpegurl", ignoreCase = true) ||
+        contains("application/x-mpegurl", ignoreCase = true) ||
+        contains("video/mp2t", ignoreCase = true) ||
+        contains("video/mp4", ignoreCase = true)
+
+private fun String.confirmedPlaybackUrl(): String? =
+    lineSequence()
+        .firstOrNull { it.contains("confirmed-playback", ignoreCase = true) }
+        ?.substringAfter("url=", "")
+        ?.substringBefore(' ')
+        ?.takeIf { it.startsWith("http://") || it.startsWith("https://") || it.startsWith("rtsp://") }
 
 private fun bindDiscoverySocket(): DatagramSocket {
     var port = TCL_DISCOVERY_PORT
@@ -3269,6 +3346,205 @@ private suspend fun recordTcl6553Video(
     } finally {
         recorder?.releaseQuietly()
     }
+}
+
+
+private suspend fun recordPlaybackStreamVideo(
+    streamUrl: String,
+    outputFile: File,
+    isActive: () -> Boolean,
+    onProgress: (Int, Long) -> Unit
+): VideoCaptureResult = withContext(Dispatchers.IO) {
+    val startedAt = System.currentTimeMillis()
+    if (streamUrl.endsWith(".mp4", ignoreCase = true)) {
+        downloadUrlToFile(streamUrl, outputFile, PLAYBACK_STREAM_MAX_SEGMENT_BYTES)
+        return@withContext VideoCaptureResult(outputFile, videoDurationMs(outputFile), 1)
+    }
+    val segmentDirectory = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}-segments")
+    segmentDirectory.mkdirs()
+    if (streamUrl.endsWith(".ts", ignoreCase = true)) {
+        val segmentFile = File(segmentDirectory, "00000.ts")
+        downloadUrlToFile(streamUrl, segmentFile, PLAYBACK_STREAM_MAX_SEGMENT_BYTES)
+        remuxPlaybackSegmentsToMp4(listOf(DownloadedPlaybackSegment(segmentFile, null)), outputFile)
+        segmentDirectory.deleteRecursively()
+        return@withContext VideoCaptureResult(outputFile, videoDurationMs(outputFile), 1)
+    }
+    val seen = linkedSetOf<String>()
+    val downloaded = mutableListOf<DownloadedPlaybackSegment>()
+    try {
+        while (isActive() && System.currentTimeMillis() - startedAt < VIDEO_CAPTURE_MAX_DURATION_MS) {
+            val (mediaPlaylistUrl, playlist) = downloadPlaybackMediaPlaylist(streamUrl)
+            val segments = parsePlaybackMediaSegments(playlist, mediaPlaylistUrl)
+            segments.forEach { segment ->
+                if (!isActive() || System.currentTimeMillis() - startedAt >= VIDEO_CAPTURE_MAX_DURATION_MS) return@forEach
+                if (seen.add(segment.url)) {
+                    val segmentFile = File(segmentDirectory, "%05d.ts".format(Locale.US, downloaded.size))
+                    downloadUrlToFile(segment.url, segmentFile, PLAYBACK_STREAM_MAX_SEGMENT_BYTES)
+                    downloaded += DownloadedPlaybackSegment(segmentFile, segment.durationMs)
+                    onProgress(downloaded.size, System.currentTimeMillis() - startedAt)
+                }
+            }
+            if (playlist.lineSequence().any { it.trim() == "#EXT-X-ENDLIST" }) break
+            delay(PLAYBACK_STREAM_PLAYLIST_REFRESH_MS)
+        }
+        require(downloaded.isNotEmpty()) { "No TV playback media segments were captured" }
+        remuxPlaybackSegmentsToMp4(downloaded, outputFile)
+        val durationMs = videoDurationMs(outputFile).takeIf { it > 0L }
+            ?: downloaded.mapNotNull { it.durationMs }.sum().takeIf { it > 0L }
+            ?: (System.currentTimeMillis() - startedAt)
+        VideoCaptureResult(outputFile, durationMs, downloaded.size)
+    } catch (error: CancellationException) {
+        if (downloaded.isNotEmpty()) {
+            remuxPlaybackSegmentsToMp4(downloaded, outputFile)
+            VideoCaptureResult(outputFile, videoDurationMs(outputFile).takeIf { it > 0L } ?: (System.currentTimeMillis() - startedAt), downloaded.size)
+        } else {
+            throw error
+        }
+    } finally {
+        segmentDirectory.deleteRecursively()
+    }
+}
+
+private fun downloadPlaybackMediaPlaylist(playlistUrl: String): Pair<String, String> {
+    var currentUrl = playlistUrl
+    repeat(4) {
+        val playlist = downloadTextUrl(currentUrl, PLAYBACK_STREAM_MAX_PLAYLIST_BYTES)
+        if (playlist.lineSequence().any { it.trim().startsWith("#EXTINF:") }) return currentUrl to playlist
+        val variantUrl = parsePlaybackVariantReferences(playlist, currentUrl).firstOrNull()
+        if (variantUrl == null) return currentUrl to playlist
+        currentUrl = variantUrl
+    }
+    error("TV playback playlist nesting is too deep")
+}
+
+private fun parsePlaybackVariantReferences(playlist: String, playlistUrl: String): List<String> {
+    val variants = mutableListOf<String>()
+    var nextLineIsVariant = false
+    playlist.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
+        when {
+            line.startsWith("#EXT-X-STREAM-INF") -> nextLineIsVariant = true
+            line.startsWith("#") -> Unit
+            nextLineIsVariant || line.endsWith(".m3u8", ignoreCase = true) || line.contains(".m3u8?", ignoreCase = true) -> {
+                variants += resolvePlaybackReference(playlistUrl, line)
+                nextLineIsVariant = false
+            }
+            else -> nextLineIsVariant = false
+        }
+    }
+    return variants
+}
+
+private fun parsePlaybackMediaSegments(playlist: String, playlistUrl: String): List<PlaybackMediaSegment> {
+    val segments = mutableListOf<PlaybackMediaSegment>()
+    var pendingDurationMs: Long? = null
+    playlist.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.forEach { line ->
+        when {
+            line.startsWith("#EXTINF:") -> pendingDurationMs = line.substringAfter(':').substringBefore(',').toDoubleOrNull()?.times(1_000.0)?.toLong()
+            line.startsWith("#") -> Unit
+            else -> {
+                segments += PlaybackMediaSegment(resolvePlaybackReference(playlistUrl, line), pendingDurationMs)
+                pendingDurationMs = null
+            }
+        }
+    }
+    return segments
+}
+
+private fun resolvePlaybackReference(playlistUrl: String, reference: String): String = URL(URL(playlistUrl), reference).toString()
+
+private fun downloadTextUrl(url: String, maxBytes: Int): String = downloadUrlBytes(url, maxBytes).toString(Charsets.UTF_8)
+
+private fun downloadUrlToFile(url: String, outputFile: File, maxBytes: Int) {
+    outputFile.parentFile?.mkdirs()
+    val bytes = downloadUrlBytes(url, maxBytes)
+    require(bytes.isNotEmpty()) { "Downloaded empty TV playback media" }
+    outputFile.writeBytes(bytes)
+}
+
+private fun downloadUrlBytes(url: String, maxBytes: Int): ByteArray {
+    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        connectTimeout = SOCKET_CONNECT_TIMEOUT_MS
+        readTimeout = SOCKET_READ_TIMEOUT_MS
+        requestMethod = "GET"
+        useCaches = false
+    }
+    return try {
+        connection.inputStream.use { stream -> stream.readBytesBounded(maxBytes) }
+    } finally {
+        connection.disconnect()
+    }
+}
+
+private fun remuxPlaybackSegmentsToMp4(segments: List<DownloadedPlaybackSegment>, outputFile: File): File {
+    require(segments.isNotEmpty()) { "No TV playback media segments to save" }
+    outputFile.parentFile?.mkdirs()
+    val firstExtractor = MediaExtractor()
+    var muxer: MediaMuxer? = null
+    try {
+        firstExtractor.setDataSource(segments.first().file.absolutePath)
+        val firstVideoTrack = firstTrackIndex(firstExtractor, "video/") ?: error("TV playback segment has no video track")
+        val firstAudioTrack = firstTrackIndex(firstExtractor, "audio/")
+        muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val muxerVideoTrack = muxer.addTrack(firstExtractor.getTrackFormat(firstVideoTrack))
+        val muxerAudioTrack = if (firstAudioTrack != null) muxer.addTrack(firstExtractor.getTrackFormat(firstAudioTrack)) else -1
+        muxer.start()
+        var timeOffsetUs = 0L
+        segments.forEach { segment ->
+            timeOffsetUs += copyPlaybackSegmentSamples(segment.file, muxer, muxerVideoTrack, muxerAudioTrack, timeOffsetUs)
+                .takeIf { it > 0L }
+                ?: ((segment.durationMs ?: 0L) * 1_000L)
+        }
+    } finally {
+        firstExtractor.release()
+        runCatching { muxer?.stop() }
+        runCatching { muxer?.release() }
+    }
+    return outputFile
+}
+
+private fun firstTrackIndex(extractor: MediaExtractor, mimePrefix: String): Int? {
+    for (track in 0 until extractor.trackCount) {
+        val mime = extractor.getTrackFormat(track).getString(MediaFormat.KEY_MIME).orEmpty()
+        if (mime.startsWith(mimePrefix)) return track
+    }
+    return null
+}
+
+private fun copyPlaybackSegmentSamples(segmentFile: File, muxer: MediaMuxer, muxerVideoTrack: Int, muxerAudioTrack: Int, timeOffsetUs: Long): Long {
+    val extractor = MediaExtractor()
+    val buffer = java.nio.ByteBuffer.allocate(2 * 1024 * 1024)
+    val info = MediaCodec.BufferInfo()
+    var maxPresentationUs = 0L
+    try {
+        extractor.setDataSource(segmentFile.absolutePath)
+        val videoTrack = firstTrackIndex(extractor, "video/")
+        val audioTrack = firstTrackIndex(extractor, "audio/")
+        videoTrack?.let { extractor.selectTrack(it) }
+        audioTrack?.takeIf { muxerAudioTrack >= 0 }?.let { extractor.selectTrack(it) }
+        while (true) {
+            val sourceTrack = extractor.sampleTrackIndex
+            if (sourceTrack < 0) break
+            val outputTrack = when (sourceTrack) {
+                videoTrack -> muxerVideoTrack
+                audioTrack -> muxerAudioTrack
+                else -> -1
+            }
+            buffer.clear()
+            val sampleSize = extractor.readSampleData(buffer, 0)
+            if (sampleSize < 0) break
+            if (outputTrack >= 0) {
+                val sampleTimeUs = extractor.sampleTime.coerceAtLeast(0L)
+                val sampleFlags = if (extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                info.set(0, sampleSize, timeOffsetUs + sampleTimeUs, sampleFlags)
+                muxer.writeSampleData(outputTrack, buffer, info)
+                maxPresentationUs = maxOf(maxPresentationUs, sampleTimeUs)
+            }
+            extractor.advance()
+        }
+    } finally {
+        extractor.release()
+    }
+    return maxPresentationUs
 }
 
 private suspend fun recordTestTvVideo(

@@ -230,6 +230,49 @@ class TclProtocolHelpersTest {
         assertTrue(ports.contains(6553))
     }
 
+    @Test
+    fun confirmedPlaybackEvidenceRecognizesRealAvDescriptors() {
+        assertEquals(true, invoke("isConfirmedPlaybackEvidence", "HTTP 200 application/vnd.apple.mpegurl confirmed-playback url=http://example.test/live.m3u8"))
+        assertEquals(true, invoke("isConfirmedPlaybackEvidence", "HTTP 200 video/mp2t"))
+        assertEquals(false, invoke("isConfirmedPlaybackEvidence", "HTTP 200 application/json"))
+    }
+
+    @Test
+    fun confirmedPlaybackUrlExtractsMarkedUrls() {
+        assertEquals(
+            "http://example.test/live.m3u8",
+            invoke("confirmedPlaybackUrl", "HTTP 200 application/vnd.apple.mpegurl confirmed-playback url=http://example.test/live.m3u8 #EXTM3U")
+        )
+        assertEquals(null, invoke("confirmedPlaybackUrl", "HTTP 200 application/json"))
+    }
+
+    @Test
+    fun playbackPlaylistParserResolvesSegmentsAndVariants() {
+        val mediaPlaylist = """
+            #EXTM3U
+            #EXTINF:3.5,
+            seg001.ts
+            #EXTINF:4.0,
+            ../base/seg002.ts?session=abc
+        """.trimIndent()
+        val segments = invoke("parsePlaybackMediaSegments", mediaPlaylist, "http://example.test/live/base/index.m3u8") as List<*>
+        val first = segments[0] ?: error("Missing segment")
+        val second = segments[1] ?: error("Missing segment")
+
+        assertEquals("http://example.test/live/base/seg001.ts", field(first, "url"))
+        assertEquals(3_500L, field(first, "durationMs"))
+        assertEquals("http://example.test/live/base/seg002.ts?session=abc", field(second, "url"))
+        assertEquals(4_000L, field(second, "durationMs"))
+
+        val masterPlaylist = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000
+            high/index.m3u8
+        """.trimIndent()
+        val variants = invoke("parsePlaybackVariantReferences", masterPlaylist, "http://example.test/live/master.m3u8") as List<*>
+        assertEquals(listOf("http://example.test/live/high/index.m3u8"), variants)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun readPacketRejectsOversizedLengths() {
         invoke("readTclPacket", DataInputStream(ByteArrayInputStream(byteArrayOf(0x00, 0x10, 0x00, 0x01))))
