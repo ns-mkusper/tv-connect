@@ -1707,7 +1707,10 @@ private fun VideoCaptureDialog(
         modifier = Modifier.testTag("video_capture_dialog"),
         title = { Text("Capture Video") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
