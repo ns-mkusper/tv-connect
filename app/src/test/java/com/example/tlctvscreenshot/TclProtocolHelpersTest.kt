@@ -219,6 +219,7 @@ class TclProtocolHelpersTest {
         assertEquals("2.0 MB", invoke("formatFileSize", 2L * 1024L * 1024L))
     }
 
+
     @Test(expected = IllegalArgumentException::class)
     fun readPacketRejectsOversizedLengths() {
         invoke("readTclPacket", DataInputStream(ByteArrayInputStream(byteArrayOf(0x00, 0x10, 0x00, 0x01))))

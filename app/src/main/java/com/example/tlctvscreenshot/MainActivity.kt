@@ -23,6 +23,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,19 +42,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -213,6 +215,14 @@ private val TCL_REMOTE_VOLUME_ROW = listOf("Vol -", "Mute", "Vol +").map(::tclRe
 
 private val TCL_REMOTE_CHANNEL_ROW = listOf("Menu", "Ch -", "Ch +").map(::tclRemoteButton)
 
+private val SquareComponentShapes = Shapes(
+    extraSmall = CutCornerShape(0.dp),
+    small = CutCornerShape(0.dp),
+    medium = CutCornerShape(0.dp),
+    large = CutCornerShape(0.dp),
+    extraLarge = CutCornerShape(0.dp)
+)
+
 private fun remoteButtonTag(label: String): String =
     "remote_button_${label.replace(" ", "_").replace("+", "plus").replace("-", "minus")}"
 
@@ -244,7 +254,7 @@ private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE
 
 @Composable
 private fun TlcTvScreenshotApp(testMode: Boolean = false) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    MaterialTheme(colorScheme = darkColorScheme(), shapes = SquareComponentShapes) {
         Surface(modifier = Modifier.fillMaxSize()) {
             ScreenshotWorkbench(testMode = testMode)
         }
@@ -287,7 +297,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var currentWifiName by remember { mutableStateOf(if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
     var selectedScreenshot by remember { mutableStateOf(screenshots.firstOrNull()) }
-    var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { BitmapFactory.decodeFile(it.absolutePath) }) }
+    var galleryBitmap by remember { mutableStateOf(selectedScreenshot?.let { loadCapturePreview(it) }) }
     var galleryStatus by remember {
         mutableStateOf(
             if (screenshots.isEmpty()) "No saved captures yet." else "Loaded ${screenshots.size} saved capture(s)."
@@ -336,7 +346,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
         screenshots = loaded
         val nextSelected = preferredFile?.takeIf { it.exists() } ?: loaded.firstOrNull()
         selectedScreenshot = nextSelected
-        galleryBitmap = nextSelected?.let { BitmapFactory.decodeFile(it.absolutePath) }
+        galleryBitmap = nextSelected?.let { loadCapturePreview(it) }
         galleryStatus = if (loaded.isEmpty()) "No saved captures yet." else "Loaded ${loaded.size} saved capture(s)."
     }
 
@@ -617,34 +627,22 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             MediaActionTile(
-                                title = "Capture TV",
+                                title = "Capture Photo",
                                 subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
                                 enabled = !isCapturingTcl,
-                                modifier = Modifier.weight(1f).testTag("action_capture_tv"),
+                                modifier = Modifier.weight(1f).testTag("action_capture_photo"),
                                 onClick = { captureTv() }
                             )
-                            MediaActionTile(
-                                title = "Cast Photo",
-                                subtitle = "Gallery",
-                                modifier = Modifier.weight(1f).testTag("action_cast_photo"),
-                                onClick = { selectedGalleryTab = "Photos"; galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here." }
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            MediaActionTile(
-                                title = "Cast Video",
-                                subtitle = "Media",
-                                modifier = Modifier.weight(1f).testTag("action_cast_video"),
-                                onClick = { selectedGalleryTab = "Videos"; galleryStatus = "Video casting is not configured in this standalone build." }
-                            )
-                            MediaActionTile(
-                                title = "Cast Music",
-                                subtitle = "Audio",
-                                modifier = Modifier.weight(1f).testTag("action_cast_music"),
-                                onClick = { selectedGalleryTab = "Music"; galleryStatus = "Music casting is not configured in this standalone build." }
+                            CastDropdownTile(
+                                modifier = Modifier.weight(1f),
+                                onPhotoClick = {
+                                    selectedGalleryTab = "Photos"
+                                    galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here."
+                                },
+                                onMusicClick = {
+                                    selectedGalleryTab = "Music"
+                                    galleryStatus = "Music casting is not configured in this standalone build."
+                                }
                             )
                         }
 
@@ -665,7 +663,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             onRefresh = { refreshGallery() },
                             onOpen = { file ->
                                 selectedScreenshot = file
-                                galleryBitmap = BitmapFactory.decodeFile(file.absolutePath)
+                                galleryBitmap = loadCapturePreview(file)
                                 galleryStatus = "Opened ${file.name}."
                             },
                             onShare = { file ->
@@ -725,7 +723,7 @@ private fun SettingsDrawer(
             .fillMaxHeight()
             .width(320.dp)
             .testTag("settings_drawer"),
-        drawerShape = RoundedCornerShape(0.dp),
+        drawerShape = RectangleShape,
         drawerContainerColor = PanelColor,
         drawerContentColor = Color.White
     ) {
@@ -778,12 +776,14 @@ private fun MediaActionTile(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Card(
+    Surface(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.height(112.dp),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(20.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(
             modifier = Modifier
@@ -794,7 +794,7 @@ private fun MediaActionTile(
             Box(
                 modifier = Modifier
                     .size(34.dp)
-                    .background(AccentColor.copy(alpha = 0.18f), RoundedCornerShape(12.dp)),
+                    .background(AccentColor.copy(alpha = 0.18f), RectangleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(title.take(1), color = AccentColor, fontWeight = FontWeight.Bold)
@@ -808,15 +808,56 @@ private fun MediaActionTile(
 }
 
 @Composable
+private fun CastDropdownTile(
+    modifier: Modifier = Modifier,
+    onPhotoClick: () -> Unit,
+    onMusicClick: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        MediaActionTile(
+            title = "Cast...",
+            subtitle = "Photo • Music",
+            modifier = Modifier.fillMaxWidth().testTag("action_cast_menu"),
+            onClick = { expanded = true }
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.testTag("cast_options_menu")
+        ) {
+            DropdownMenuItem(
+                modifier = Modifier.testTag("cast_option_photo"),
+                text = { Text("Photo") },
+                onClick = {
+                    expanded = false
+                    onPhotoClick()
+                }
+            )
+            DropdownMenuItem(
+                modifier = Modifier.testTag("cast_option_music"),
+                text = { Text("Music") },
+                onClick = {
+                    expanded = false
+                    onMusicClick()
+                }
+            )
+        }
+    }
+}
+
+@Composable
 private fun ActivityStatusPanel(
     tclStatus: String,
     galleryStatus: String,
     remoteStatus: String
 ) {
-    Card(
+    Surface(
         modifier = Modifier.testTag("status_panel"),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(22.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Activity", fontWeight = FontWeight.Bold, color = MutedText)
@@ -839,7 +880,7 @@ private fun GallerySection(
     onShare: (File) -> Unit,
     onDelete: (File) -> Unit
 ) {
-    val tabs = listOf("All", "Photos", "Videos", "Favorites")
+    val tabs = listOf("All", "Photos", "Favorites")
     var showGalleryPane by remember { mutableStateOf(false) }
 
     if (showGalleryPane) {
@@ -856,10 +897,12 @@ private fun GallerySection(
         )
     }
 
-    Card(
+    Surface(
         modifier = Modifier.testTag("gallery_section"),
-        colors = CardDefaults.cardColors(containerColor = PanelColor),
-        shape = RoundedCornerShape(24.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -884,7 +927,7 @@ private fun GallerySection(
                         .fillMaxWidth()
                         .testTag("selected_capture_preview")
                         .height(190.dp)
-                        .background(AppBackground, RoundedCornerShape(18.dp))
+                        .background(Color.Transparent, RectangleShape)
                 )
             }
             if (selectedScreenshot != null) {
@@ -898,10 +941,10 @@ private fun GallerySection(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(160.dp)
-                        .background(AppBackground, RoundedCornerShape(20.dp)),
+                        .background(Color.Transparent, RectangleShape),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("Capture TV to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
+                    Text("Capture photo to add screenshots here", color = MutedText, textAlign = TextAlign.Center)
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -984,13 +1027,15 @@ private fun GalleryStripItem(
     selected: Boolean,
     onOpen: (File) -> Unit
 ) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
-    Card(
+    val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
+    Surface(
         modifier = Modifier
             .width(154.dp)
             .testTag("gallery_item"),
-        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
-        shape = RoundedCornerShape(18.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Box(
@@ -999,7 +1044,7 @@ private fun GalleryStripItem(
                     .testTag("gallery_item_preview")
                     .height(86.dp)
                     .clickable { onOpen(file) }
-                    .background(Color.Black, RoundedCornerShape(14.dp)),
+                    .background(Color.Black, RectangleShape),
                 contentAlignment = Alignment.Center
             ) {
                 if (bitmap != null) {
@@ -1027,11 +1072,13 @@ private fun GalleryPaneItem(
     onShare: (File) -> Unit,
     onDelete: (File) -> Unit
 ) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) { BitmapFactory.decodeFile(file.absolutePath) }
-    Card(
+    val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
+    Surface(
         modifier = Modifier.testTag("gallery_pane_item"),
-        colors = CardDefaults.cardColors(containerColor = if (selected) AccentColor.copy(alpha = 0.24f) else AppBackground),
-        shape = RoundedCornerShape(18.dp)
+        color = Color.Transparent,
+        shape = RectangleShape,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier.padding(10.dp),
@@ -1041,7 +1088,7 @@ private fun GalleryPaneItem(
             Box(
                 modifier = Modifier
                     .size(82.dp)
-                    .background(Color.Black, RoundedCornerShape(14.dp))
+                    .background(Color.Black, RectangleShape)
                     .clickable { onOpen(file) },
                 contentAlignment = Alignment.Center
             ) {
@@ -1108,7 +1155,7 @@ private fun BottomMediaBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(74.dp)
-                .background(PanelColor)
+                .background(Color.Transparent)
                 .padding(horizontal = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1118,7 +1165,7 @@ private fun BottomMediaBar(
                 modifier = Modifier.testTag("bottom_remote_button"),
                 onClick = onRemoteClick,
                 colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
-                shape = RoundedCornerShape(28.dp),
+                shape = RectangleShape,
                 contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
             ) { Text("Remote", fontWeight = FontWeight.Bold) }
             TextButton(
@@ -1173,7 +1220,7 @@ private fun SearchingTvIcon(isSearching: Boolean) {
                 .size(haloSize)
                 .alpha(haloAlpha)
                 .testTag("connect_tv_halo"),
-            shape = CircleShape,
+            shape = RectangleShape,
             color = AccentColor,
             content = {}
         )
@@ -1218,7 +1265,13 @@ private fun ConnectTvDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 val searchingLabel = rememberSearchingLabel(isDiscovering)
-                Card(colors = CardDefaults.cardColors(containerColor = AccentColor.copy(alpha = 0.18f))) {
+                Surface(
+                    modifier = Modifier,
+                    color = Color.Transparent,
+                    shape = RectangleShape,
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
+                ) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(14.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1258,12 +1311,15 @@ private fun ConnectTvDialog(
 
                 discoveredDevices.forEach { device ->
                     val isSelected = selectedDevice?.ip == device.ip
-                    Card(
+                    Surface(
                         onClick = { onUseDevice(device) },
-                        modifier = Modifier.fillMaxWidth().testTag("discovered_device_card"),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isSelected) AccentColor.copy(alpha = 0.22f) else MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("discovered_device_card"),
+                        color = Color.Transparent,
+                        shape = RectangleShape,
+                        tonalElevation = 0.dp,
+                        shadowElevation = 0.dp
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -1436,6 +1492,13 @@ private data class Tcl6553ScreenshotResult(
     val bitmap: Bitmap,
     val byteCount: Int,
     val file: File,
+    val url: String,
+    val log: String,
+    val timingSummary: String = ""
+)
+
+private data class Tcl6553ScreenshotBytes(
+    val bytes: ByteArray,
     val url: String,
     val log: String,
     val timingSummary: String = ""
@@ -1647,11 +1710,11 @@ private fun loadScreenshotFiles(context: Context): List<File> {
 private fun shareScreenshot(context: Context, file: File) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_SEND).apply {
-        type = imageMimeType(file)
+        type = captureMimeType(file)
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, "Share screenshot"))
+    context.startActivity(Intent.createChooser(intent, "Share capture"))
 }
 
 private suspend fun exportScreenshotToPictures(context: Context, file: File): Uri = withContext(Dispatchers.IO) {
@@ -1690,6 +1753,10 @@ private fun imageMimeType(file: File): String = when (file.extension.lowercase()
     "png" -> "image/png"
     else -> "application/octet-stream"
 }
+
+private fun captureMimeType(file: File): String = imageMimeType(file)
+
+private fun loadCapturePreview(file: File): Bitmap? = BitmapFactory.decodeFile(file.absolutePath)
 
 private fun screenshotDirectory(context: Context): File = File(context.filesDir, "Screenshots")
 
@@ -2215,6 +2282,19 @@ private suspend fun captureTcl6553Screenshot(
     imageDirectory: File,
     sessionManager: Tcl6553SessionManager? = null
 ): Tcl6553ScreenshotResult = withContext(Dispatchers.IO) {
+    val result = captureTcl6553ScreenshotBytes(tvIp, port, phoneName, uuid, phoneImei, sessionManager)
+    val log = StringBuilder(result.log)
+    saveTclScreenshotResult(result.url, result.bytes, imageDirectory, log, timingSummary = result.timingSummary)
+}
+
+private suspend fun captureTcl6553ScreenshotBytes(
+    tvIp: String,
+    port: Int,
+    phoneName: String,
+    uuid: String,
+    phoneImei: String,
+    sessionManager: Tcl6553SessionManager? = null
+): Tcl6553ScreenshotBytes = withContext(Dispatchers.IO) {
     val log = StringBuilder()
     val trace = TclCaptureTrace()
     sessionManager?.captureScreenshotUrl(log)?.let { url ->
@@ -2222,9 +2302,7 @@ private suspend fun captureTcl6553Screenshot(
         log.protocolLog("download warm url $url")
         runCatching {
             val bytes = downloadScreenshotWithRetries(url, log, trace, allowPortScan = false)
-            saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
-        }.onSuccess { result ->
-            return@withContext result
+            return@withContext Tcl6553ScreenshotBytes(bytes, url, log.toString().trim(), trace.summary())
         }.onFailure { error ->
             log.protocolLog("warm download failed; retrying with cold capture: ${error.message ?: error::class.java.simpleName}")
             trace.mark("Warm download failed")
@@ -2282,7 +2360,7 @@ private suspend fun captureTcl6553Screenshot(
         val url = shotUrls.lastOrNull() ?: error("No screenshot URL returned. $log")
 
         val bytes = downloadScreenshotWithRetries(url, log, trace)
-        saveTclScreenshotResult(url, bytes, imageDirectory, log, trace)
+        Tcl6553ScreenshotBytes(bytes, url, log.toString().trim(), trace.summary())
     }
 }
 
@@ -2378,7 +2456,8 @@ private fun saveTclScreenshotResult(
     imageBytes: ByteArray,
     imageDirectory: File,
     log: StringBuilder,
-    trace: TclCaptureTrace? = null
+    trace: TclCaptureTrace? = null,
+    timingSummary: String? = null
 ): Tcl6553ScreenshotResult {
     val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
         ?: error("Downloaded ${imageBytes.size} bytes, but Android could not decode them as an image")
@@ -2398,7 +2477,7 @@ private fun saveTclScreenshotResult(
         file = file,
         url = url,
         log = log.toString().trim(),
-        timingSummary = trace?.summary().orEmpty()
+        timingSummary = timingSummary ?: trace?.summary().orEmpty()
     )
 }
 

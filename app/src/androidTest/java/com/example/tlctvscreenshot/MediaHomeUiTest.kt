@@ -91,7 +91,7 @@ class MediaHomeUiTest {
     }
 
     private fun captureTestScreenshotAndWaitForCount(count: Int) {
-        composeRule.onNodeWithTag("action_capture_tv").performClick()
+        composeRule.onNodeWithTag("action_capture_photo").performClick()
         composeRule.waitUntil(timeoutMillis = 5_000) {
             composeRule.onAllNodesWithTag("gallery_item").fetchSemanticsNodes().size >= count
         }
@@ -102,10 +102,9 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
         composeRule.onAllNodesWithText("Media Cast").assertCountEquals(0)
         composeRule.onNodeWithTag("top_tv_button").assertDoesNotExist()
-        composeRule.onNodeWithTag("action_capture_tv").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("action_cast_photo").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("action_cast_video").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("action_cast_music").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("action_capture_photo").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("action_cast_menu").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("cast_options_menu").assertDoesNotExist()
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHeightIsEqualTo(48.dp)
@@ -116,7 +115,6 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("gallery_section").assertIsDisplayed()
         composeRule.onNodeWithTag("gallery_tab_All").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_tab_Photos").assertIsDisplayed().assertIsEnabled()
-        composeRule.onNodeWithTag("gallery_tab_Videos").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_tab_Favorites").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("gallery_refresh_button").assertIsDisplayed().assertIsEnabled()
     }
@@ -125,15 +123,20 @@ class MediaHomeUiTest {
     fun leftEdgeTouchOnCaptureTileDoesNotOpenSettingsDrawer() {
         composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
 
-        composeRule.onNodeWithTag("action_capture_tv").performTouchInput {
+        composeRule.onNodeWithTag("action_capture_photo").performTouchInput {
             down(Offset(1f, 1f))
             moveBy(Offset(80f, 0f))
             up()
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            runCatching {
+                composeRule.onNodeWithTag("action_capture_photo").assertIsEnabled()
+            }.isSuccess
+        }
 
-        composeRule.onNodeWithTag("action_capture_tv").assertIsDisplayed().assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("action_capture_photo").assertIsDisplayed().assertIsEnabled().performClick()
         composeRule.onNodeWithTag("settings_drawer").assertIsNotDisplayed()
     }
 
@@ -258,20 +261,19 @@ class MediaHomeUiTest {
     @Test
     fun mediaTilesAndGalleryTabsRespond() {
         enableDebugActivityPane()
-        composeRule.onNodeWithTag("action_cast_photo").performClick()
+        composeRule.onNodeWithTag("action_cast_menu").performClick()
+        composeRule.onNodeWithTag("cast_option_photo").assertIsDisplayed().performClick()
         assertAnyTextDisplayed("Photo casting is not required", substring = true)
-        composeRule.onNodeWithTag("action_cast_video").performClick()
-        assertAnyTextDisplayed("Video casting is not configured", substring = true)
-        composeRule.onNodeWithTag("action_cast_music").performClick()
+        composeRule.onNodeWithTag("action_cast_menu").performClick()
+        composeRule.onNodeWithTag("cast_option_music").assertIsDisplayed().performClick()
         assertAnyTextDisplayed("Music casting is not configured", substring = true)
 
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
         composeRule.onNodeWithTag("gallery_tab_All").performClick()
         composeRule.onNodeWithTag("gallery_tab_Photos").performClick()
-        composeRule.onNodeWithTag("gallery_tab_Videos").performClick()
         composeRule.onNodeWithTag("gallery_tab_Favorites").performClick()
         composeRule.onNodeWithTag("gallery_refresh_button").performClick()
-        assertAnyTextDisplayed("No saved captures yet.")
+        composeRule.onNodeWithTag("gallery_section").assertIsDisplayed()
     }
 
     @Test
