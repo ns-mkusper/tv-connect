@@ -89,6 +89,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -1238,45 +1240,122 @@ private fun GalleryPaneDialog(
     onDelete: (File) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.testTag("gallery_pane_dialog"),
-        title = { Text("All captures") },
-        text = {
-            if (screenshots.isEmpty()) {
-                Box(
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("gallery_pane_dialog"),
+            color = AppBackground,
+            shape = RectangleShape
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxSize()
+                        .padding(bottom = 84.dp)
                 ) {
-                    Text("No saved captures yet.", color = MutedText, textAlign = TextAlign.Center)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(420.dp)
-                        .testTag("gallery_pane_list"),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp)
-                ) {
-                    items(screenshots, key = { it.absolutePath }) { file ->
-                        GalleryPaneItem(
-                            file = file,
-                            selected = file == selectedScreenshot,
-                            onOpen = onOpen,
-                            onShare = onShare,
-                            onDelete = onDelete
-                        )
+                    GalleryPaneTopBar(onDismiss)
+                    Text(
+                        "Living Room TV Captures (${screenshots.size})",
+                        color = DarkText,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                    )
+                    if (screenshots.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("No saved captures yet.", color = MutedText, textAlign = TextAlign.Center)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("gallery_pane_list"),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                        ) {
+                            items(screenshots.chunked(2), key = { row -> row.joinToString("|") { it.absolutePath } }) { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                                    row.forEach { file ->
+                                        GalleryPaneItem(
+                                            file = file,
+                                            selected = file == selectedScreenshot,
+                                            onOpen = onOpen,
+                                            onShare = onShare,
+                                            onDelete = onDelete,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
                     }
                 }
+                GalleryPaneBottomBar(
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    onHomeClick = onDismiss
+                )
             }
-        },
-        confirmButton = {
-            TextButton(modifier = Modifier.testTag("gallery_pane_done_button"), onClick = onDismiss) { Text("Done") }
         }
-    )
+    }
+}
+
+@Composable
+private fun GalleryPaneTopBar(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .background(TealDark)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onDismiss, contentPadding = PaddingValues(0.dp), modifier = Modifier.width(36.dp)) {
+            Text("‹", color = Color.White, fontSize = 34.sp)
+        }
+        Text("Screenshot Gallery", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(Color(0xFFD8C2AE), RoundedCornerShape(50)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("MK", color = DarkText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun GalleryPaneBottomBar(modifier: Modifier = Modifier, onHomeClick: () -> Unit) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = CardSurface,
+        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            BottomNavItem("⌂", "Home", false, "gallery_bottom_home_button", onHomeClick)
+            BottomNavItem("▱", "Devices", false, "gallery_bottom_devices_button", onHomeClick)
+            BottomNavItem("◱", "Cast", false, "gallery_bottom_cast_button", onHomeClick)
+            BottomNavItem("⌘", "Remote", false, "gallery_bottom_remote_button", onHomeClick)
+            BottomNavItem("▣", "Library", true, "gallery_bottom_library_button", {})
+        }
+    }
 }
 
 @Composable
@@ -1328,49 +1407,46 @@ private fun GalleryPaneItem(
     selected: Boolean,
     onOpen: (File) -> Unit,
     onShare: (File) -> Unit,
-    onDelete: (File) -> Unit
+    onDelete: (File) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
-    Surface(
-        modifier = Modifier.testTag("gallery_pane_item"),
-        color = Color.Transparent,
-        shape = RectangleShape,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp
+    Column(
+        modifier = modifier
+            .testTag("gallery_pane_item")
+            .clickable { onOpen(file) }
     ) {
-        Row(
-            modifier = Modifier.padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(126.dp)
+                .background(Color.Black, RoundedCornerShape(8.dp))
+                .clickable { onOpen(file) }
+                .testTag("gallery_pane_item_open_button"),
+            contentAlignment = Alignment.Center
         ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Saved TV capture ${file.name}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text("No preview", style = MaterialTheme.typography.labelSmall, color = MutedText, textAlign = TextAlign.Center)
+            }
             Box(
                 modifier = Modifier
-                    .size(82.dp)
-                    .background(Color.Black, RectangleShape)
-                    .clickable { onOpen(file) },
-                contentAlignment = Alignment.Center
-            ) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Saved TV capture ${file.name}",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text("No preview", style = MaterialTheme.typography.labelSmall, color = MutedText, textAlign = TextAlign.Center)
-                }
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_delete_button"), onClick = { onDelete(file) }) { Text("🗑️") }
-                }
-            }
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(18.dp)
+                    .border(2.dp, Color.White, RoundedCornerShape(3.dp))
+                    .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(3.dp))
+            )
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text("The Crown", color = DarkText, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text("S4:E6 - Today 10:08 AM", color = DarkText, fontSize = 12.sp, maxLines = 1)
     }
 }
 
