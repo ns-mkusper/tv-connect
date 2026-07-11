@@ -1503,7 +1503,8 @@ private fun BottomMediaBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .testTag("bottom_status_bar"),
+            .testTag("bottom_status_bar")
+            .clickable(onClick = statusClick),
         color = CardSurface,
         shadowElevation = 8.dp,
         shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)

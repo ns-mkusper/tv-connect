@@ -217,23 +217,25 @@ jobs:
           emulator-boot-timeout: 480
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
+            set -eu
+            SCREENSHOT_SCRIPT="${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
             capture_set() {
-              local apk="$1"
-              local out_dir="$2"
+              apk="$1"
+              out_dir="$2"
               mkdir -p "$out_dir"
               adb shell cmd uimode night no || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/compose-workbench-light.png' LABEL='compose-workbench-light' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/compose-workbench-light.png" LABEL="compose-workbench-light" bash "$SCREENSHOT_SCRIPT"
               adb shell am force-stop com.example.tlctvscreenshot || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/capture-success-light.png' LABEL='capture-success-light' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/capture-success-light.png" LABEL="capture-success-light" bash "$SCREENSHOT_SCRIPT"
               adb shell am force-stop com.example.tlctvscreenshot || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/screenshot-gallery-light.png' LABEL='screenshot-gallery-light' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/screenshot-gallery-light.png" LABEL="screenshot-gallery-light" bash "$SCREENSHOT_SCRIPT"
               adb shell am force-stop com.example.tlctvscreenshot || true
               adb shell cmd uimode night yes || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/compose-workbench-dark.png' LABEL='compose-workbench-dark' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/compose-workbench-dark.png" LABEL="compose-workbench-dark" bash "$SCREENSHOT_SCRIPT"
               adb shell am force-stop com.example.tlctvscreenshot || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/capture-success-dark.png' LABEL='capture-success-dark' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/capture-success-dark.png" LABEL="capture-success-dark" bash "$SCREENSHOT_SCRIPT"
               adb shell am force-stop com.example.tlctvscreenshot || true
-              bash -eo pipefail -c "APK='$apk' OUT='$out_dir/screenshot-gallery-dark.png' LABEL='screenshot-gallery-dark' bash '${{ github.workspace }}/scripts/ci_emulator_screenshot.sh'"
+              APK="$apk" OUT="$out_dir/screenshot-gallery-dark.png" LABEL="screenshot-gallery-dark" bash "$SCREENSHOT_SCRIPT"
               adb shell cmd uimode night no || true
             }
             capture_set "${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" "${{ github.workspace }}/e2e-artifacts/android-screenshots-before"
