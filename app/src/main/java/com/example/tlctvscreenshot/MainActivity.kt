@@ -60,6 +60,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -243,7 +245,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TlcTvScreenshotApp(
-                testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
+                testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false),
+                screenshotLabel = intent.getStringExtra(EXTRA_SCREENSHOT_LABEL).orEmpty()
             )
         }
     }
@@ -253,18 +256,20 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE"
+private const val EXTRA_SCREENSHOT_LABEL = "screenshot_label"
 
 @Composable
-private fun TlcTvScreenshotApp(testMode: Boolean = false) {
-    MaterialTheme(colorScheme = lightColorScheme(), shapes = ConnectTvShapes) {
+private fun TlcTvScreenshotApp(testMode: Boolean = false, screenshotLabel: String = "") {
+    val colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+    MaterialTheme(colorScheme = colorScheme, shapes = ConnectTvShapes) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            ScreenshotWorkbench(testMode = testMode)
+            ScreenshotWorkbench(testMode = testMode, screenshotLabel = screenshotLabel)
         }
     }
 }
 
 @Composable
-private fun ScreenshotWorkbench(testMode: Boolean = false) {
+private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: String = "") {
     val context = LocalContext.current
     SideEffect { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
@@ -318,6 +323,22 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
     val connectedToTv = selectedDevice != null || currentTvIp().isNotBlank()
     val fastCaptureUiStatus = fastCaptureUiStatus(connectedToTv, fastCaptureState)
+    val screenshotScenario = remember(screenshotLabel) { screenshotLabel.lowercase(Locale.US) }
+    val openGalleryForScreenshot = screenshotScenario.contains("gallery")
+
+    LaunchedEffect(testMode, screenshotScenario) {
+        if (testMode && (screenshotScenario.contains("success") || screenshotScenario.contains("gallery"))) {
+            repeat(if (screenshotScenario.contains("gallery")) 8 else 1) {
+                runCatching { createTestTclScreenshot(screenshotDirectory) }
+            }
+            val loaded = loadScreenshotFiles(context)
+            screenshots = loaded
+            selectedScreenshot = loaded.firstOrNull()
+            galleryBitmap = selectedScreenshot?.let { loadCapturePreview(it) }
+            galleryStatus = if (loaded.isEmpty()) "No saved captures yet." else "Loaded ${loaded.size} saved capture(s)."
+            showScreenshotSuccess = screenshotScenario.contains("success")
+        }
+    }
 
     LaunchedEffect(showScreenshotSuccess, selectedScreenshot) {
         if (showScreenshotSuccess) {
@@ -712,7 +733,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                                     shareScreenshot(context, file)
                                 }
                             },
-                            onDelete = { file -> deleteCandidate = file }
+                            onDelete = { file -> deleteCandidate = file },
+                            openGalleryForScreenshot = openGalleryForScreenshot
                         )
                     }
 
@@ -1138,10 +1160,15 @@ private fun GallerySection(
     onRefresh: () -> Unit,
     onOpen: (File) -> Unit,
     onShare: (File) -> Unit,
-    onDelete: (File) -> Unit
+    onDelete: (File) -> Unit,
+    openGalleryForScreenshot: Boolean = false
 ) {
     val tabs = listOf("All", "Photos", "Favorites")
-    var showGalleryPane by remember { mutableStateOf(false) }
+    var showGalleryPane by remember { mutableStateOf(openGalleryForScreenshot) }
+
+    LaunchedEffect(openGalleryForScreenshot, screenshots.size) {
+        if (openGalleryForScreenshot && screenshots.isNotEmpty()) showGalleryPane = true
+    }
 
     if (showGalleryPane) {
         GalleryPaneDialog(
@@ -1824,17 +1851,28 @@ private fun RemoteButton(
     }
 }
 
-private val AppBackground = Color(0xFFEAF7F5)
-private val PanelColor = Color(0xFFF8FFFF)
-private val CardSurface = Color(0xFFF9FFFF)
-private val TealPrimary = Color(0xFF0B7D80)
-private val TealDark = Color(0xFF063F48)
-private val DarkText = Color(0xFF071E22)
-private val RemoteButtonColor = Color(0xFFE6F5F3)
-private val RemoteButtonContentColor = TealDark
-private val MutedText = Color(0xFF57777B)
-private val AccentColor = TealPrimary
-private val SuccessColor = Color(0xFF23775F)
+private val AppBackground: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF071617) else Color(0xFFEAF7F5)
+private val PanelColor: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF102629) else Color(0xFFF8FFFF)
+private val CardSurface: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF143034) else Color(0xFFF9FFFF)
+private val TealPrimary: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF37C5BF) else Color(0xFF0B7D80)
+private val TealDark: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF8BE4DF) else Color(0xFF063F48)
+private val DarkText: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFFE7F7F5) else Color(0xFF071E22)
+private val RemoteButtonColor: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF19383C) else Color(0xFFE6F5F3)
+private val RemoteButtonContentColor: Color
+    @Composable get() = TealDark
+private val MutedText: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF9CC4C2) else Color(0xFF57777B)
+private val AccentColor: Color
+    @Composable get() = TealPrimary
+private val SuccessColor: Color
+    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF62D6A9) else Color(0xFF23775F)
 
 private data class Tcl6553ScreenshotResult(
     val bitmap: Bitmap,
