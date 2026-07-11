@@ -308,6 +308,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
+    var showScreenshotSuccess by remember { mutableStateOf(false) }
     val settingsDrawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
@@ -315,6 +316,13 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
     val connectedToTv = selectedDevice != null || currentTvIp().isNotBlank()
     val fastCaptureUiStatus = fastCaptureUiStatus(connectedToTv, fastCaptureState)
+
+    LaunchedEffect(showScreenshotSuccess, selectedScreenshot) {
+        if (showScreenshotSuccess) {
+            delay(6_000L)
+            showScreenshotSuccess = false
+        }
+    }
 
     fun rememberSelectedDevice(device: TclDiscoveryDevice) {
         val remembered = device.toSelectedDevice()
@@ -414,6 +422,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                         screenshots = loadScreenshotFiles(context)
                         tclStatus = "Captured test TV screenshot."
                         galleryStatus = "Added ${result.file.name} to Gallery."
+                        showScreenshotSuccess = true
                     }
                     .onFailure { error ->
                         tclStatus = "Test capture failed: ${error.message ?: error::class.java.simpleName}"
@@ -456,6 +465,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     }
                 }
                 galleryStatus = "Added ${result.file.name} to Gallery. Publishing to Pictures..."
+                showScreenshotSuccess = true
                 coroutineScope.launch {
                     runCatching { exportScreenshotToPictures(context.applicationContext, result.file) }
                         .onSuccess {
@@ -627,8 +637,16 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             deviceName = selectedDevice?.name?.ifBlank { null } ?: currentTvIp().ifBlank { "No TV selected" }
                         )
 
+                        if (showScreenshotSuccess) {
+                            ScreenshotSuccessBanner()
+                        }
+
                         ControlTileGrid(
-                            screenshotSubtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
+                            screenshotSubtitle = when {
+                                isCapturingTcl -> "Capturing"
+                                showScreenshotSuccess -> "View in Library"
+                                else -> fastCaptureUiStatus.captureSubtitle
+                            },
                             screenshotEnabled = !isCapturingTcl,
                             onRemoteClick = { showRemoteDialog = true },
                             onCaptureClick = { captureTv() },
@@ -646,9 +664,23 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             }
                         )
 
+                        val recentCapturedFile = selectedScreenshot
+                        if (showScreenshotSuccess && recentCapturedFile != null) {
+                            RecentCapturedContentPanel(
+                                file = recentCapturedFile,
+                                bitmap = galleryBitmap,
+                                onOpen = { file ->
+                                    selectedScreenshot = file
+                                    galleryBitmap = loadCapturePreview(file)
+                                    galleryStatus = "Opened ${file.name}."
+                                }
+                            )
+                        }
+
                         NowPlayingPanel(
                             previewBitmap = galleryBitmap,
-                            connected = connectedToTv
+                            connected = connectedToTv,
+                            compact = showScreenshotSuccess
                         )
 
                         if (debugModeEnabled) {
@@ -737,6 +769,27 @@ private fun DeviceControlTitle(connected: Boolean, deviceName: String) {
 }
 
 @Composable
+private fun ScreenshotSuccessBanner() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("screenshot_success_banner"),
+        color = CardSurface,
+        shape = RoundedCornerShape(10.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("●", color = TealPrimary, fontSize = 16.sp)
+            Text("Screenshot Successful!", color = DarkText, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
 private fun ControlTileGrid(
     screenshotSubtitle: String,
     screenshotEnabled: Boolean,
@@ -815,18 +868,65 @@ private fun ControlTile(
 }
 
 @Composable
-private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean) {
+private fun RecentCapturedContentPanel(
+    file: File,
+    bitmap: Bitmap?,
+    onOpen: (File) -> Unit
+) {
     Surface(
-        modifier = Modifier.fillMaxWidth().testTag("now_playing_panel"),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("recent_captured_content_panel")
+            .clickable { onOpen(file) },
         color = CardSurface,
         shape = RoundedCornerShape(12.dp),
         shadowElevation = 3.dp
     ) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 72.dp, height = 54.dp)
+                    .background(TealDark, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Recent captured content preview",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("TV", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Recent Captured Content", color = MutedText, fontSize = 12.sp)
+                Text("The Crown - S4:E6 Scene", color = DarkText, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("Tap to open in Gallery", color = MutedText, fontSize = 12.sp)
+            }
+            Text("●", color = TealPrimary, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean, compact: Boolean = false) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("now_playing_panel"),
+        color = CardSurface,
+        shape = RoundedCornerShape(if (compact) 0.dp else 12.dp),
+        shadowElevation = if (compact) 0.dp else 3.dp
+    ) {
+        Column(modifier = Modifier.padding(if (compact) 8.dp else 14.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(
                     modifier = Modifier
-                        .size(width = 72.dp, height = 54.dp)
+                        .size(width = if (compact) 46.dp else 72.dp, height = if (compact) 36.dp else 54.dp)
                         .background(TealDark, RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -846,16 +946,24 @@ private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean) {
                     Text(if (connected) "The Crown" else "Connect a TV", color = DarkText, fontWeight = FontWeight.Bold)
                     Text(if (connected) "Netflix" else "Ready when you are", color = MutedText, fontSize = 12.sp)
                 }
-                Text("Ⅱ", color = DarkText, fontSize = 20.sp)
-                Text("◀", color = DarkText, fontSize = 18.sp)
-                Text("▶", color = DarkText, fontSize = 18.sp)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("▸", color = DarkText, fontSize = 18.sp)
-                Box(modifier = Modifier.weight(1f).height(3.dp).background(Color(0xFFB7D1CF), RoundedCornerShape(4.dp))) {
-                    Box(modifier = Modifier.fillMaxWidth(0.48f).height(3.dp).background(TealPrimary, RoundedCornerShape(4.dp)))
+                if (!compact) {
+                    Text("Ⅱ", color = DarkText, fontSize = 20.sp)
+                    Text("◀", color = DarkText, fontSize = 18.sp)
+                    Text("▶", color = DarkText, fontSize = 18.sp)
+                } else {
+                    Text("Ⅱ", color = DarkText, fontSize = 18.sp)
+                    Text("◀", color = DarkText, fontSize = 15.sp)
+                    Text("▶", color = DarkText, fontSize = 15.sp)
                 }
-                Text("45%", color = DarkText, fontSize = 12.sp)
+            }
+            if (!compact) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("▸", color = DarkText, fontSize = 18.sp)
+                    Box(modifier = Modifier.weight(1f).height(3.dp).background(Color(0xFFB7D1CF), RoundedCornerShape(4.dp))) {
+                        Box(modifier = Modifier.fillMaxWidth(0.48f).height(3.dp).background(TealPrimary, RoundedCornerShape(4.dp)))
+                    }
+                    Text("45%", color = DarkText, fontSize = 12.sp)
+                }
             }
         }
     }
