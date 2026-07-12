@@ -27,6 +27,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,7 +43,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -60,7 +61,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -69,6 +72,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,8 +91,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -215,12 +223,12 @@ private val TCL_REMOTE_VOLUME_ROW = listOf("Vol -", "Mute", "Vol +").map(::tclRe
 
 private val TCL_REMOTE_CHANNEL_ROW = listOf("Menu", "Ch -", "Ch +").map(::tclRemoteButton)
 
-private val SquareComponentShapes = Shapes(
-    extraSmall = CutCornerShape(0.dp),
-    small = CutCornerShape(0.dp),
-    medium = CutCornerShape(0.dp),
-    large = CutCornerShape(0.dp),
-    extraLarge = CutCornerShape(0.dp)
+private val ConnectTvShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(28.dp)
 )
 
 private fun remoteButtonTag(label: String): String =
@@ -241,7 +249,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TlcTvScreenshotApp(
-                testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false)
+                testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false),
+                screenshotLabel = intent.getStringExtra(EXTRA_SCREENSHOT_LABEL).orEmpty(),
+                forcedDarkMode = when (intent.getStringExtra(EXTRA_UI_THEME)?.lowercase(Locale.US)) {
+                    "dark" -> true
+                    "light" -> false
+                    else -> null
+                }
             )
         }
     }
@@ -251,18 +265,30 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE"
+private const val EXTRA_SCREENSHOT_LABEL = "screenshot_label"
+private const val EXTRA_UI_THEME = "ui_theme"
+
+private val LocalConnectTvDarkMode = staticCompositionLocalOf { false }
 
 @Composable
-private fun TlcTvScreenshotApp(testMode: Boolean = false) {
-    MaterialTheme(colorScheme = darkColorScheme(), shapes = SquareComponentShapes) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            ScreenshotWorkbench(testMode = testMode)
+private fun TlcTvScreenshotApp(
+    testMode: Boolean = false,
+    screenshotLabel: String = "",
+    forcedDarkMode: Boolean? = null
+) {
+    val darkMode = forcedDarkMode ?: isSystemInDarkTheme()
+    val colorScheme = if (darkMode) darkColorScheme() else lightColorScheme()
+    CompositionLocalProvider(LocalConnectTvDarkMode provides darkMode) {
+        MaterialTheme(colorScheme = colorScheme, shapes = ConnectTvShapes) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                ScreenshotWorkbench(testMode = testMode, screenshotLabel = screenshotLabel)
+            }
         }
     }
 }
 
 @Composable
-private fun ScreenshotWorkbench(testMode: Boolean = false) {
+private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: String = "") {
     val context = LocalContext.current
     SideEffect { ScreenshotPortCache.bind(context.applicationContext) }
     val coroutineScope = rememberCoroutineScope()
@@ -308,6 +334,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
     var deleteCandidate by remember { mutableStateOf<File?>(null) }
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
+    var showScreenshotSuccess by remember { mutableStateOf(false) }
     val settingsDrawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
@@ -315,6 +342,29 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 
     val connectedToTv = selectedDevice != null || currentTvIp().isNotBlank()
     val fastCaptureUiStatus = fastCaptureUiStatus(connectedToTv, fastCaptureState)
+    val screenshotScenario = remember(screenshotLabel) { screenshotLabel.lowercase(Locale.US) }
+    val openGalleryForScreenshot = screenshotScenario.contains("gallery")
+
+    LaunchedEffect(testMode, screenshotScenario) {
+        if (testMode && (screenshotScenario.contains("success") || screenshotScenario.contains("gallery"))) {
+            repeat(if (screenshotScenario.contains("gallery")) 8 else 1) {
+                runCatching { createTestTclScreenshot(screenshotDirectory) }
+            }
+            val loaded = loadScreenshotFiles(context)
+            screenshots = loaded
+            selectedScreenshot = loaded.firstOrNull()
+            galleryBitmap = selectedScreenshot?.let { loadCapturePreview(it) }
+            galleryStatus = if (loaded.isEmpty()) "No saved captures yet." else "Loaded ${loaded.size} saved capture(s)."
+            showScreenshotSuccess = screenshotScenario.contains("success")
+        }
+    }
+
+    LaunchedEffect(showScreenshotSuccess, selectedScreenshot) {
+        if (showScreenshotSuccess) {
+            delay(6_000L)
+            showScreenshotSuccess = false
+        }
+    }
 
     fun rememberSelectedDevice(device: TclDiscoveryDevice) {
         val remembered = device.toSelectedDevice()
@@ -414,6 +464,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                         screenshots = loadScreenshotFiles(context)
                         tclStatus = "Captured test TV screenshot."
                         galleryStatus = "Added ${result.file.name} to Gallery."
+                        showScreenshotSuccess = true
                     }
                     .onFailure { error ->
                         tclStatus = "Test capture failed: ${error.message ?: error::class.java.simpleName}"
@@ -456,6 +507,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                     }
                 }
                 galleryStatus = "Added ${result.file.name} to Gallery. Publishing to Pictures..."
+                showScreenshotSuccess = true
                 coroutineScope.launch {
                     runCatching { exportScreenshotToPictures(context.applicationContext, result.file) }
                         .onSuccess {
@@ -618,33 +670,60 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                             .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp)
                     ) {
-                        MediaHomeHeader(
+                        ConnectTvTopBar(
                             onSettingsClick = { coroutineScope.launch { settingsDrawerState.open() } }
                         )
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            MediaActionTile(
-                                title = "Capture Photo",
-                                subtitle = if (isCapturingTcl) "Capturing" else fastCaptureUiStatus.captureSubtitle,
-                                enabled = !isCapturingTcl,
-                                modifier = Modifier.weight(1f).testTag("action_capture_photo"),
-                                onClick = { captureTv() }
-                            )
-                            CastDropdownTile(
-                                modifier = Modifier.weight(1f),
-                                onPhotoClick = {
-                                    selectedGalleryTab = "Photos"
-                                    galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here."
-                                },
-                                onMusicClick = {
-                                    selectedGalleryTab = "Music"
-                                    galleryStatus = "Music casting is not configured in this standalone build."
+                        DeviceControlTitle(
+                            connected = connectedToTv,
+                            deviceName = selectedDevice?.name?.ifBlank { null } ?: currentTvIp().ifBlank { "No TV selected" }
+                        )
+
+                        if (showScreenshotSuccess) {
+                            ScreenshotSuccessBanner()
+                        }
+
+                        ControlTileGrid(
+                            screenshotSubtitle = when {
+                                isCapturingTcl -> "Capturing"
+                                showScreenshotSuccess -> "View in Library"
+                                else -> fastCaptureUiStatus.captureSubtitle
+                            },
+                            screenshotEnabled = !isCapturingTcl,
+                            onRemoteClick = { showRemoteDialog = true },
+                            onCaptureClick = { captureTv() },
+                            onChannelsClick = {
+                                selectedGalleryTab = "All"
+                                galleryStatus = "Channels and apps controls are not configured yet."
+                            },
+                            onPhotoCastClick = {
+                                selectedGalleryTab = "Photos"
+                                galleryStatus = "Photo casting is not required for TV capture. Saved screenshots stay available here."
+                            },
+                            onMusicCastClick = {
+                                selectedGalleryTab = "Music"
+                                galleryStatus = "Music casting is not configured in this standalone build."
+                            }
+                        )
+
+                        val recentCapturedFile = selectedScreenshot
+                        if (showScreenshotSuccess && recentCapturedFile != null) {
+                            RecentCapturedContentPanel(
+                                file = recentCapturedFile,
+                                bitmap = galleryBitmap,
+                                onOpen = { file ->
+                                    selectedScreenshot = file
+                                    galleryBitmap = loadCapturePreview(file)
+                                    galleryStatus = "Opened ${file.name}."
                                 }
                             )
                         }
+
+                        NowPlayingPanel(
+                            previewBitmap = galleryBitmap,
+                            connected = connectedToTv,
+                            compact = showScreenshotSuccess
+                        )
 
                         if (debugModeEnabled) {
                             ActivityStatusPanel(
@@ -673,7 +752,8 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
                                     shareScreenshot(context, file)
                                 }
                             },
-                            onDelete = { file -> deleteCandidate = file }
+                            onDelete = { file -> deleteCandidate = file },
+                            openGalleryForScreenshot = openGalleryForScreenshot
                         )
                     }
 
@@ -691,23 +771,283 @@ private fun ScreenshotWorkbench(testMode: Boolean = false) {
 }
 
 @Composable
-private fun MediaHomeHeader(
+private fun ConnectTvTopBar(
     onSettingsClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
+            .height(50.dp)
             .testTag("top_status_area"),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.End
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        TextButton(
-            modifier = Modifier.testTag("settings_menu_button"),
-            onClick = onSettingsClick,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+        Text("▰", color = TealPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+        Text("Connect", color = DarkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text("TV", color = TealPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.weight(1f))
+        Text("♧", color = DarkText, fontSize = 22.sp, modifier = Modifier.padding(end = 16.dp))
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .background(Color(0xFFD8C2AE), RoundedCornerShape(50))
+                .clickable(onClick = onSettingsClick)
+                .testTag("settings_menu_button"),
+            contentAlignment = Alignment.Center
         ) {
-            Text("☰", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("MK", color = DarkText, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun DeviceControlTitle(connected: Boolean, deviceName: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Living Room TV Control", color = DarkText, fontSize = 24.sp, fontWeight = FontWeight.Medium)
+        Text(
+            if (connected) "Connected to: $deviceName" else "Connect to a TV to start controlling it",
+            color = MutedText,
+            fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+private fun ScreenshotSuccessBanner() {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("screenshot_success_banner"),
+        color = CardSurface,
+        shape = RoundedCornerShape(10.dp),
+        shadowElevation = 4.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("●", color = TealPrimary, fontSize = 16.sp)
+            Text("Screenshot Successful!", color = DarkText, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun ControlTileGrid(
+    screenshotSubtitle: String,
+    screenshotEnabled: Boolean,
+    onRemoteClick: () -> Unit,
+    onCaptureClick: () -> Unit,
+    onChannelsClick: () -> Unit,
+    onPhotoCastClick: () -> Unit,
+    onMusicCastClick: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            ControlTile(
+                icon = "⌘",
+                title = "Remote Control",
+                subtitle = "Active",
+                modifier = Modifier.weight(1f).testTag("remote_control_tile"),
+                onClick = onRemoteClick
+            )
+            CastDropdownTile(
+                modifier = Modifier.weight(1f),
+                onPhotoClick = onPhotoCastClick,
+                onMusicClick = onMusicCastClick
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            ControlTile(
+                icon = "▣",
+                title = "Take Screenshot",
+                subtitle = screenshotSubtitle,
+                enabled = screenshotEnabled,
+                modifier = Modifier.weight(1f).testTag("action_capture_photo"),
+                onClick = onCaptureClick
+            )
+            ControlTile(
+                icon = "▦",
+                title = "Channels/Apps",
+                subtitle = "Active",
+                modifier = Modifier.weight(1f).testTag("channels_apps_tile"),
+                onClick = onChannelsClick
+            )
+        }
+    }
+}
+
+@Composable
+private fun ControlTile(
+    icon: String,
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.height(116.dp),
+        color = CardSurface,
+        shape = RoundedCornerShape(10.dp),
+        shadowElevation = 3.dp,
+        tonalElevation = 0.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(icon, color = TealDark, fontSize = 34.sp, fontWeight = FontWeight.Black)
+            Spacer(modifier = Modifier.height(8.dp))
+            FittedSingleLineText(
+                text = title,
+                color = DarkText,
+                maxFontSize = 14.sp,
+                minFontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.fillMaxWidth()
+            )
+            FittedSingleLineText(
+                text = subtitle,
+                color = SuccessColor,
+                maxFontSize = 12.sp,
+                minFontSize = 8.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun FittedSingleLineText(
+    text: String,
+    color: Color,
+    maxFontSize: TextUnit,
+    minFontSize: TextUnit,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight? = null
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val characterCount = text.length.coerceAtLeast(1)
+        val fittedSp = (maxWidth.value / (characterCount * 0.58f)).coerceIn(minFontSize.value, maxFontSize.value)
+        Text(
+            text = text,
+            color = color,
+            fontSize = fittedSp.sp,
+            lineHeight = (fittedSp * 1.12f).sp,
+            fontWeight = fontWeight,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun RecentCapturedContentPanel(
+    file: File,
+    bitmap: Bitmap?,
+    onOpen: (File) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("recent_captured_content_panel")
+            .clickable { onOpen(file) },
+        color = CardSurface,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 72.dp, height = 54.dp)
+                    .background(TealDark, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Recent captured content preview",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Text("TV", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Recent Captured Content", color = MutedText, fontSize = 12.sp)
+                Text("The Crown - S4:E6 Scene", color = DarkText, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("Tap to open in Gallery", color = MutedText, fontSize = 12.sp)
+            }
+            Text("●", color = TealPrimary, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean, compact: Boolean = false) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("now_playing_panel"),
+        color = CardSurface,
+        shape = RoundedCornerShape(if (compact) 0.dp else 12.dp),
+        shadowElevation = if (compact) 0.dp else 3.dp
+    ) {
+        Column(modifier = Modifier.padding(if (compact) 8.dp else 14.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(width = if (compact) 46.dp else 72.dp, height = if (compact) 36.dp else 54.dp)
+                        .background(TealDark, RoundedCornerShape(8.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (previewBitmap != null) {
+                        Image(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            contentDescription = "Now playing preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Text("TV", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Now Playing:", color = MutedText, fontSize = 12.sp)
+                    Text(if (connected) "The Crown" else "Connect a TV", color = DarkText, fontWeight = FontWeight.Bold)
+                    Text(if (connected) "Netflix" else "Ready when you are", color = MutedText, fontSize = 12.sp)
+                }
+                if (!compact) {
+                    Text("Ⅱ", color = DarkText, fontSize = 20.sp)
+                    Text("◀", color = DarkText, fontSize = 18.sp)
+                    Text("▶", color = DarkText, fontSize = 18.sp)
+                } else {
+                    Text("Ⅱ", color = DarkText, fontSize = 18.sp)
+                    Text("◀", color = DarkText, fontSize = 15.sp)
+                    Text("▶", color = DarkText, fontSize = 15.sp)
+                }
+            }
+            if (!compact) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("▸", color = DarkText, fontSize = 18.sp)
+                    Box(modifier = Modifier.weight(1f).height(3.dp).background(Color(0xFFB7D1CF), RoundedCornerShape(4.dp))) {
+                        Box(modifier = Modifier.fillMaxWidth(0.48f).height(3.dp).background(TealPrimary, RoundedCornerShape(4.dp)))
+                    }
+                    Text("45%", color = DarkText, fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -723,9 +1063,9 @@ private fun SettingsDrawer(
             .fillMaxHeight()
             .width(320.dp)
             .testTag("settings_drawer"),
-        drawerShape = RectangleShape,
+        drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
         drawerContainerColor = PanelColor,
-        drawerContentColor = Color.White
+        drawerContentColor = DarkText
     ) {
         Column(
             modifier = Modifier
@@ -815,9 +1155,10 @@ private fun CastDropdownTile(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier = modifier) {
-        MediaActionTile(
-            title = "Cast...",
-            subtitle = "Photo • Music",
+        ControlTile(
+            icon = "◱",
+            title = "Media Cast",
+            subtitle = "Active",
             modifier = Modifier.fillMaxWidth().testTag("action_cast_menu"),
             onClick = { expanded = true }
         )
@@ -878,10 +1219,15 @@ private fun GallerySection(
     onRefresh: () -> Unit,
     onOpen: (File) -> Unit,
     onShare: (File) -> Unit,
-    onDelete: (File) -> Unit
+    onDelete: (File) -> Unit,
+    openGalleryForScreenshot: Boolean = false
 ) {
     val tabs = listOf("All", "Photos", "Favorites")
-    var showGalleryPane by remember { mutableStateOf(false) }
+    var showGalleryPane by remember { mutableStateOf(openGalleryForScreenshot) }
+
+    LaunchedEffect(openGalleryForScreenshot, screenshots.size) {
+        if (openGalleryForScreenshot && screenshots.isNotEmpty()) showGalleryPane = true
+    }
 
     if (showGalleryPane) {
         GalleryPaneDialog(
@@ -980,45 +1326,122 @@ private fun GalleryPaneDialog(
     onDelete: (File) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        modifier = Modifier.testTag("gallery_pane_dialog"),
-        title = { Text("All captures") },
-        text = {
-            if (screenshots.isEmpty()) {
-                Box(
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("gallery_pane_dialog"),
+            color = AppBackground,
+            shape = RectangleShape
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(160.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxSize()
+                        .padding(bottom = 84.dp)
                 ) {
-                    Text("No saved captures yet.", color = MutedText, textAlign = TextAlign.Center)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(420.dp)
-                        .testTag("gallery_pane_list"),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp)
-                ) {
-                    items(screenshots, key = { it.absolutePath }) { file ->
-                        GalleryPaneItem(
-                            file = file,
-                            selected = file == selectedScreenshot,
-                            onOpen = onOpen,
-                            onShare = onShare,
-                            onDelete = onDelete
-                        )
+                    GalleryPaneTopBar(onDismiss)
+                    Text(
+                        "Living Room TV Captures (${screenshots.size})",
+                        color = DarkText,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                    )
+                    if (screenshots.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("No saved captures yet.", color = MutedText, textAlign = TextAlign.Center)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("gallery_pane_list"),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                        ) {
+                            items(screenshots.chunked(2), key = { row -> row.joinToString("|") { it.absolutePath } }) { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                                    row.forEach { file ->
+                                        GalleryPaneItem(
+                                            file = file,
+                                            selected = file == selectedScreenshot,
+                                            onOpen = onOpen,
+                                            onShare = onShare,
+                                            onDelete = onDelete,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
                     }
                 }
+                GalleryPaneBottomBar(
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    onHomeClick = onDismiss
+                )
             }
-        },
-        confirmButton = {
-            TextButton(modifier = Modifier.testTag("gallery_pane_done_button"), onClick = onDismiss) { Text("Done") }
         }
-    )
+    }
+}
+
+@Composable
+private fun GalleryPaneTopBar(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+            .background(TealDark)
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onDismiss, contentPadding = PaddingValues(0.dp), modifier = Modifier.width(36.dp)) {
+            Text("‹", color = Color.White, fontSize = 34.sp)
+        }
+        Text("Screenshot Gallery", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(Color(0xFFD8C2AE), RoundedCornerShape(50)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("MK", color = DarkText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun GalleryPaneBottomBar(modifier: Modifier = Modifier, onHomeClick: () -> Unit) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = CardSurface,
+        shadowElevation = 8.dp,
+        shape = RectangleShape
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(74.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            BottomNavItem("⌂", "Home", false, "gallery_bottom_home_button", onHomeClick)
+            BottomNavItem("▱", "Devices", false, "gallery_bottom_devices_button", onHomeClick)
+            BottomNavItem("◱", "Cast", false, "gallery_bottom_cast_button", onHomeClick)
+            BottomNavItem("⌘", "Remote", false, "gallery_bottom_remote_button", onHomeClick)
+            BottomNavItem("▣", "Library", true, "gallery_bottom_library_button", {})
+        }
+    }
 }
 
 @Composable
@@ -1070,49 +1493,46 @@ private fun GalleryPaneItem(
     selected: Boolean,
     onOpen: (File) -> Unit,
     onShare: (File) -> Unit,
-    onDelete: (File) -> Unit
+    onDelete: (File) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val bitmap = remember(file.absolutePath, file.lastModified()) { loadCapturePreview(file) }
-    Surface(
-        modifier = Modifier.testTag("gallery_pane_item"),
-        color = Color.Transparent,
-        shape = RectangleShape,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp
+    Column(
+        modifier = modifier
+            .testTag("gallery_pane_item")
+            .clickable { onOpen(file) }
     ) {
-        Row(
-            modifier = Modifier.padding(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(126.dp)
+                .background(Color.Black, RoundedCornerShape(8.dp))
+                .clickable { onOpen(file) }
+                .testTag("gallery_pane_item_open_button"),
+            contentAlignment = Alignment.Center
         ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Saved TV capture ${file.name}",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text("No preview", style = MaterialTheme.typography.labelSmall, color = MutedText, textAlign = TextAlign.Center)
+            }
             Box(
                 modifier = Modifier
-                    .size(82.dp)
-                    .background(Color.Black, RectangleShape)
-                    .clickable { onOpen(file) },
-                contentAlignment = Alignment.Center
-            ) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Saved TV capture ${file.name}",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text("No preview", style = MaterialTheme.typography.labelSmall, color = MutedText, textAlign = TextAlign.Center)
-                }
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(file.name, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text("${formatFileSize(file.length())} • ${formatTimestamp(file.lastModified())}", style = MaterialTheme.typography.labelSmall, color = MutedText, maxLines = 1)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_open_button"), onClick = { onOpen(file) }) { Text("Open") }
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_share_button"), onClick = { onShare(file) }) { Text("Share") }
-                    TextButton(modifier = Modifier.testTag("gallery_pane_item_delete_button"), onClick = { onDelete(file) }) { Text("🗑️") }
-                }
-            }
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(18.dp)
+                    .border(2.dp, Color.White, RoundedCornerShape(3.dp))
+                    .background(Color.Black.copy(alpha = 0.18f), RoundedCornerShape(3.dp))
+            )
         }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text("The Crown", color = DarkText, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text("S4:E6 - Today 10:08 AM", color = DarkText, fontSize = 12.sp, maxLines = 1)
     }
 }
 
@@ -1139,42 +1559,59 @@ private fun BottomMediaBar(
     modifier: Modifier = Modifier
 ) {
     val statusClick = if (fastCaptureStatus.retryAvailable) onFastConnectClick else onConnectClick
-    Column(modifier = modifier.fillMaxWidth()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("bottom_status_bar")
-                .height(34.dp)
-                .clickable(onClick = statusClick)
-                .background(if (fastCaptureStatus.ready) SuccessColor else AccentColor),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(fastCaptureStatus.title, color = Color.White, fontWeight = FontWeight.Bold)
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(74.dp)
-                .background(Color.Transparent)
-                .padding(horizontal = 18.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            TextButton(modifier = Modifier.testTag("bottom_connect_button"), onClick = onConnectClick) { Text("Connect") }
-            Button(
-                modifier = Modifier.testTag("bottom_remote_button"),
-                onClick = onRemoteClick,
-                colors = ButtonDefaults.buttonColors(containerColor = AccentColor),
-                shape = RectangleShape,
-                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp)
-            ) { Text("Remote", fontWeight = FontWeight.Bold) }
-            TextButton(
-                modifier = Modifier.testTag(if (fastCaptureStatus.retryAvailable) "bottom_fast_retry_button" else "bottom_tv_button"),
-                onClick = statusClick
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("bottom_status_bar")
+            .clickable(onClick = statusClick),
+        color = CardSurface,
+        shadowElevation = 8.dp,
+        shape = RectangleShape
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .width(72.dp)
+                    .height(3.dp)
+                    .background(TealPrimary, RoundedCornerShape(4.dp))
+                    .align(Alignment.Start)
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(74.dp)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceAround
             ) {
-                Text(if (fastCaptureStatus.retryAvailable) "Retry fast" else "TV")
+                BottomNavItem("⌂", "Home", true, "bottom_tv_button", statusClick)
+                BottomNavItem("▱", "Devices", false, "bottom_connect_button", onConnectClick)
+                BottomNavItem("◱", "Cast", false, "bottom_cast_button", statusClick)
+                BottomNavItem("⌘", "Remote", false, "bottom_remote_button", onRemoteClick)
+                BottomNavItem("▣", "Library", false, "bottom_library_button", statusClick)
             }
         }
+    }
+}
+
+@Composable
+private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTag: String, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(68.dp)
+            .clickable(onClick = onClick)
+            .testTag(testTag),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        FittedSingleLineText(
+            text = label,
+            color = if (selected) TealPrimary else DarkText,
+            maxFontSize = 11.sp,
+            minFontSize = 7.5.sp,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -1480,13 +1917,28 @@ private fun RemoteButton(
     }
 }
 
-private val AppBackground = Color(0xFF0B0F18)
-private val PanelColor = Color(0xFF171D2A)
-private val RemoteButtonColor = Color(0xFFFFF3B0)
-private val RemoteButtonContentColor = Color(0xFF05070D)
-private val MutedText = Color(0xFFA9B0C2)
-private val AccentColor = Color(0xFFE6426E)
-private val SuccessColor = Color(0xFF2DAF7D)
+private val AppBackground: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF071617) else Color(0xFFEAF7F5)
+private val PanelColor: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF102629) else Color(0xFFF8FFFF)
+private val CardSurface: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF143034) else Color(0xFFF9FFFF)
+private val TealPrimary: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF37C5BF) else Color(0xFF0B7D80)
+private val TealDark: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF8BE4DF) else Color(0xFF063F48)
+private val DarkText: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFFE7F7F5) else Color(0xFF071E22)
+private val RemoteButtonColor: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF19383C) else Color(0xFFE6F5F3)
+private val RemoteButtonContentColor: Color
+    @Composable get() = TealDark
+private val MutedText: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF9CC4C2) else Color(0xFF57777B)
+private val AccentColor: Color
+    @Composable get() = TealPrimary
+private val SuccessColor: Color
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF62D6A9) else Color(0xFF23775F)
 
 private data class Tcl6553ScreenshotResult(
     val bitmap: Bitmap,

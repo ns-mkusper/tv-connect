@@ -100,14 +100,14 @@ class MediaHomeUiTest {
     @Test
     fun homeScreenRendersDarkMediaDashboardWidgets() {
         composeRule.onNodeWithTag("home_root").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Media Cast").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Media Cast").assertCountEquals(1)
         composeRule.onNodeWithTag("top_tv_button").assertDoesNotExist()
         composeRule.onNodeWithTag("action_capture_photo").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("action_cast_menu").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("cast_options_menu").assertDoesNotExist()
         composeRule.onNodeWithTag("status_panel").assertDoesNotExist()
         composeRule.onNodeWithTag("settings_menu_button").assertIsDisplayed().assertHasClickAction()
-        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHeightIsEqualTo(48.dp)
+        composeRule.onNodeWithTag("top_status_area").assertIsDisplayed().assertHeightIsEqualTo(50.dp)
         composeRule.onNodeWithTag("bottom_status_bar").assertIsDisplayed().assertHasClickAction()
         composeRule.onNodeWithTag("bottom_connect_button").assertIsDisplayed().assertIsEnabled()
         composeRule.onNodeWithTag("bottom_remote_button").assertIsDisplayed().assertIsEnabled()
@@ -184,8 +184,7 @@ class MediaHomeUiTest {
         assertAnyTextExists("Connected")
         composeRule.onNodeWithTag("connect_done_button").performClick()
         composeRule.onNodeWithTag("connect_dialog").assertDoesNotExist()
-        assertAnyTextExists("TV connected — fallback capture only")
-        composeRule.onNodeWithTag("bottom_fast_retry_button").assertIsDisplayed().assertIsEnabled()
+        composeRule.onNodeWithTag("bottom_tv_button").assertIsDisplayed().assertIsEnabled()
     }
 
     @Test
@@ -197,9 +196,7 @@ class MediaHomeUiTest {
         }
         composeRule.onNodeWithTag("discovered_device_card").performClick()
         composeRule.onNodeWithTag("connect_done_button").performClick()
-        assertAnyTextExists("TV connected — fallback capture only")
-
-        composeRule.onNodeWithTag("bottom_fast_retry_button").assertIsDisplayed().assertHasClickAction().performClick()
+        composeRule.onNodeWithTag("bottom_tv_button").assertIsDisplayed().assertHasClickAction().performClick()
         assertAnyTextExists("Retrying fast TV connection...")
     }
 
@@ -207,7 +204,7 @@ class MediaHomeUiTest {
     fun captureTileAddsHorizontalGalleryItemAndGalleryActionsWork() {
         enableDebugActivityPane()
         captureTestScreenshotAndWaitForCount(1)
-        assertAnyTextDisplayed("Captured test TV screenshot.")
+        composeRule.onNodeWithTag("screenshot_success_banner").assertIsDisplayed()
         composeRule.onNodeWithTag("home_root").performScrollToNode(hasTestTag("gallery_section"))
         composeRule.onNodeWithTag("gallery_strip").assertIsDisplayed()
         composeRule.onAllNodesWithTag("gallery_item").assertCountEquals(1)
@@ -246,7 +243,7 @@ class MediaHomeUiTest {
         composeRule.onNodeWithTag("gallery_pane_dialog").assertIsDisplayed()
         composeRule.onNodeWithTag("gallery_pane_list").assertIsDisplayed()
         assertTrue(composeRule.onAllNodesWithTag("gallery_pane_item").fetchSemanticsNodes().isNotEmpty())
-        composeRule.onNodeWithTag("gallery_pane_list").performScrollToIndex(2)
+        composeRule.onNodeWithTag("gallery_pane_list").performScrollToIndex(1)
         assertTrue(composeRule.onAllNodesWithTag("gallery_pane_item").fetchSemanticsNodes().isNotEmpty())
 
         composeRule.onAllNodesWithTag("gallery_pane_item_open_button")[0].performSemanticsAction(SemanticsActions.OnClick)
