@@ -1679,7 +1679,7 @@ private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTa
             if (label == "Devices") {
                 TvDeviceIcon(size = 22.dp, color = if (selected) TealPrimary else DarkText)
             } else {
-                Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 24.sp)
             }
         }
         FittedSingleLineText(
