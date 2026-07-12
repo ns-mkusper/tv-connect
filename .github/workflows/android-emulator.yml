@@ -217,31 +217,36 @@ jobs:
           emulator-boot-timeout: 480
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           script: |
-            set -eu
-            SCREENSHOT_SCRIPT="${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
-            capture_set() {
-              apk="$1"
-              out_dir="$2"
-              mkdir -p "$out_dir"
-              adb shell cmd uimode night no || true
-              APK="$apk" OUT="$out_dir/compose-workbench-light.png" LABEL="compose-workbench-light" bash "$SCREENSHOT_SCRIPT"
-              adb shell am force-stop com.example.tlctvscreenshot || true
-              APK="$apk" OUT="$out_dir/capture-success-light.png" LABEL="capture-success-light" bash "$SCREENSHOT_SCRIPT"
-              adb shell am force-stop com.example.tlctvscreenshot || true
-              APK="$apk" OUT="$out_dir/screenshot-gallery-light.png" LABEL="screenshot-gallery-light" bash "$SCREENSHOT_SCRIPT"
-              adb shell am force-stop com.example.tlctvscreenshot || true
-              adb shell cmd uimode night yes || true
-              APK="$apk" OUT="$out_dir/compose-workbench-dark.png" LABEL="compose-workbench-dark" bash "$SCREENSHOT_SCRIPT"
-              adb shell am force-stop com.example.tlctvscreenshot || true
-              APK="$apk" OUT="$out_dir/capture-success-dark.png" LABEL="capture-success-dark" bash "$SCREENSHOT_SCRIPT"
-              adb shell am force-stop com.example.tlctvscreenshot || true
-              APK="$apk" OUT="$out_dir/screenshot-gallery-dark.png" LABEL="screenshot-gallery-dark" bash "$SCREENSHOT_SCRIPT"
-              adb shell cmd uimode night no || true
-            }
-            capture_set "${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" "${{ github.workspace }}/e2e-artifacts/android-screenshots-before"
+            mkdir -p "${{ github.workspace }}/e2e-artifacts/android-screenshots-before" "${{ github.workspace }}/e2e-artifacts/android-screenshots-after"
+            adb shell cmd uimode night no || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/compose-workbench-light.png" LABEL="compose-workbench-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/capture-success-light.png" LABEL="capture-success-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/screenshot-gallery-light.png" LABEL="screenshot-gallery-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            adb shell cmd uimode night yes || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/compose-workbench-dark.png" LABEL="compose-workbench-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/capture-success-dark.png" LABEL="capture-success-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/base-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-before/screenshot-gallery-dark.png" LABEL="screenshot-gallery-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell cmd uimode night no || true
             adb shell am force-stop com.example.tlctvscreenshot || true
             adb uninstall com.example.tlctvscreenshot || true
-            capture_set "${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" "${{ github.workspace }}/e2e-artifacts/android-screenshots-after"
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/compose-workbench-light.png" LABEL="compose-workbench-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/capture-success-light.png" LABEL="capture-success-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/screenshot-gallery-light.png" LABEL="screenshot-gallery-light" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            adb shell cmd uimode night yes || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/compose-workbench-dark.png" LABEL="compose-workbench-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/capture-success-dark.png" LABEL="capture-success-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell am force-stop com.example.tlctvscreenshot || true
+            APK="${{ github.workspace }}/e2e-artifacts/apks/head-app-debug.apk" OUT="${{ github.workspace }}/e2e-artifacts/android-screenshots-after/screenshot-gallery-dark.png" LABEL="screenshot-gallery-dark" bash "${{ github.workspace }}/scripts/ci_emulator_screenshot.sh"
+            adb shell cmd uimode night no || true
 
       - name: Compare Android emulator screenshots
         if: always()
