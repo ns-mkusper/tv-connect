@@ -1425,7 +1425,7 @@ private fun GalleryPaneBottomBar(modifier: Modifier = Modifier, onHomeClick: () 
         modifier = modifier.fillMaxWidth(),
         color = CardSurface,
         shadowElevation = 8.dp,
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+        shape = RectangleShape
     ) {
         Row(
             modifier = Modifier
@@ -1566,7 +1566,7 @@ private fun BottomMediaBar(
             .clickable(onClick = statusClick),
         color = CardSurface,
         shadowElevation = 8.dp,
-        shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp)
+        shape = RectangleShape
     ) {
         Column {
             Box(
