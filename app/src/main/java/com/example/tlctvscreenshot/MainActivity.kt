@@ -94,6 +94,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
@@ -795,7 +796,8 @@ private fun ConnectTvTopBar(
             .testTag("top_status_area"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("▰", color = TealPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+        TvDeviceIcon(size = 28.dp, color = TealPrimary)
+        Spacer(modifier = Modifier.width(6.dp))
         Text("Connect", color = DarkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("TV", color = TealPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.weight(1f))
@@ -821,6 +823,36 @@ private fun DeviceControlTitle(connected: Boolean, deviceName: String) {
             if (connected) "Connected to: $deviceName" else "Connect to a TV to start controlling it",
             color = MutedText,
             fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+private fun TvDeviceIcon(size: Dp = 28.dp, color: Color = TealPrimary, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .width(size)
+            .height(size),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .width(size * 0.88f)
+                .height(size * 0.62f)
+                .border(2.dp, color, RoundedCornerShape(2.dp))
+        )
+        Box(
+            modifier = Modifier
+                .width(size * 0.18f)
+                .height(size * 0.12f)
+                .background(color)
+        )
+        Box(
+            modifier = Modifier
+                .width(size * 0.52f)
+                .height(2.dp)
+                .background(color, RoundedCornerShape(2.dp))
         )
     }
 }
@@ -1638,7 +1670,11 @@ private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTa
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        if (label == "Devices") {
+            TvDeviceIcon(size = 22.dp, color = if (selected) TealPrimary else DarkText)
+        } else {
+            Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        }
         FittedSingleLineText(
             text = label,
             color = if (selected) TealPrimary else DarkText,
@@ -1691,11 +1727,11 @@ private fun SearchingTvIcon(isSearching: Boolean) {
                 .size(haloSize)
                 .alpha(haloAlpha)
                 .testTag("connect_tv_halo"),
-            shape = RectangleShape,
+            shape = RoundedCornerShape(10.dp),
             color = AccentColor,
             content = {}
         )
-        Text("▭", fontSize = 44.sp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
+        TvDeviceIcon(size = 48.dp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
     }
 }
 
@@ -1797,7 +1833,7 @@ private fun ConnectTvDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(deviceTypeIcon(device.deviceType), fontSize = 28.sp, modifier = Modifier.testTag("device_type_icon"))
+                            TvDeviceIcon(size = 30.dp, color = AccentColor, modifier = Modifier.testTag("device_type_icon"))
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
                                 Text(
