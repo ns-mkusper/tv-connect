@@ -8,6 +8,7 @@ OUT=${OUT:-captures/compose-workbench-emulator.png}
 PACKAGE=${PACKAGE:-com.example.tlctvscreenshot}
 ACTIVITY=${ACTIVITY:-.MainActivity}
 LABEL=${LABEL:-compose-workbench}
+UI_THEME=${UI_THEME:-}
 UI_TEST_MODE=${UI_TEST_MODE:-1}
 ADB_INSTALL_TIMEOUT_SECONDS=${ADB_INSTALL_TIMEOUT_SECONDS:-600}
 
@@ -21,13 +22,18 @@ timeout "$ADB_INSTALL_TIMEOUT_SECONDS" adb install --no-streaming -r -g -t "$APK
 adb shell pm clear "$PACKAGE" >/dev/null 2>&1 || true
 adb shell am force-stop "$PACKAGE" || true
 if [[ "$UI_TEST_MODE" == "1" ]]; then
-  adb shell am start \
-    -n "$PACKAGE/$ACTIVITY" \
-    --ez com.example.tlctvscreenshot.UI_TEST_MODE true \
+  start_args=(
+    -n "$PACKAGE/$ACTIVITY"
+    --ez com.example.tlctvscreenshot.UI_TEST_MODE true
     --es screenshot_label "$LABEL"
+  )
+  if [[ -n "$UI_THEME" ]]; then
+    start_args+=(--es ui_theme "$UI_THEME")
+  fi
+  adb shell am start "${start_args[@]}"
 else
   adb shell am start -n "$PACKAGE/$ACTIVITY"
 fi
-sleep 5
+sleep 6
 adb exec-out screencap -p > "$OUT"
 echo "$OUT"

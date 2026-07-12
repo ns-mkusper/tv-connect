@@ -27,6 +27,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -89,8 +91,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
@@ -246,7 +250,12 @@ class MainActivity : ComponentActivity() {
         setContent {
             TlcTvScreenshotApp(
                 testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false),
-                screenshotLabel = intent.getStringExtra(EXTRA_SCREENSHOT_LABEL).orEmpty()
+                screenshotLabel = intent.getStringExtra(EXTRA_SCREENSHOT_LABEL).orEmpty(),
+                forcedDarkMode = when (intent.getStringExtra(EXTRA_UI_THEME)?.lowercase(Locale.US)) {
+                    "dark" -> true
+                    "light" -> false
+                    else -> null
+                }
             )
         }
     }
@@ -257,13 +266,23 @@ class MainActivity : ComponentActivity() {
 
 private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE"
 private const val EXTRA_SCREENSHOT_LABEL = "screenshot_label"
+private const val EXTRA_UI_THEME = "ui_theme"
+
+private val LocalConnectTvDarkMode = staticCompositionLocalOf { false }
 
 @Composable
-private fun TlcTvScreenshotApp(testMode: Boolean = false, screenshotLabel: String = "") {
-    val colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
-    MaterialTheme(colorScheme = colorScheme, shapes = ConnectTvShapes) {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            ScreenshotWorkbench(testMode = testMode, screenshotLabel = screenshotLabel)
+private fun TlcTvScreenshotApp(
+    testMode: Boolean = false,
+    screenshotLabel: String = "",
+    forcedDarkMode: Boolean? = null
+) {
+    val darkMode = forcedDarkMode ?: isSystemInDarkTheme()
+    val colorScheme = if (darkMode) darkColorScheme() else lightColorScheme()
+    CompositionLocalProvider(LocalConnectTvDarkMode provides darkMode) {
+        MaterialTheme(colorScheme = colorScheme, shapes = ConnectTvShapes) {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                ScreenshotWorkbench(testMode = testMode, screenshotLabel = screenshotLabel)
+            }
         }
     }
 }
@@ -885,9 +904,49 @@ private fun ControlTile(
         ) {
             Text(icon, color = TealDark, fontSize = 34.sp, fontWeight = FontWeight.Black)
             Spacer(modifier = Modifier.height(8.dp))
-            Text(title, color = DarkText, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, maxLines = 1)
-            Text(subtitle, color = SuccessColor, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+            FittedSingleLineText(
+                text = title,
+                color = DarkText,
+                maxFontSize = 14.sp,
+                minFontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.fillMaxWidth()
+            )
+            FittedSingleLineText(
+                text = subtitle,
+                color = SuccessColor,
+                maxFontSize = 12.sp,
+                minFontSize = 8.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
+    }
+}
+
+@Composable
+private fun FittedSingleLineText(
+    text: String,
+    color: Color,
+    maxFontSize: TextUnit,
+    minFontSize: TextUnit,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight? = null
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val characterCount = text.length.coerceAtLeast(1)
+        val fittedSp = (maxWidth.value / (characterCount * 0.58f)).coerceIn(minFontSize.value, maxFontSize.value)
+        Text(
+            text = text,
+            color = color,
+            fontSize = fittedSp.sp,
+            lineHeight = (fittedSp * 1.12f).sp,
+            fontWeight = fontWeight,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -1546,7 +1605,13 @@ private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTa
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        Text(label, color = if (selected) TealPrimary else DarkText, fontSize = 11.sp, textAlign = TextAlign.Center)
+        FittedSingleLineText(
+            text = label,
+            color = if (selected) TealPrimary else DarkText,
+            maxFontSize = 11.sp,
+            minFontSize = 7.5.sp,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -1853,27 +1918,27 @@ private fun RemoteButton(
 }
 
 private val AppBackground: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF071617) else Color(0xFFEAF7F5)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF071617) else Color(0xFFEAF7F5)
 private val PanelColor: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF102629) else Color(0xFFF8FFFF)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF102629) else Color(0xFFF8FFFF)
 private val CardSurface: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF143034) else Color(0xFFF9FFFF)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF143034) else Color(0xFFF9FFFF)
 private val TealPrimary: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF37C5BF) else Color(0xFF0B7D80)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF37C5BF) else Color(0xFF0B7D80)
 private val TealDark: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF8BE4DF) else Color(0xFF063F48)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF8BE4DF) else Color(0xFF063F48)
 private val DarkText: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFFE7F7F5) else Color(0xFF071E22)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFFE7F7F5) else Color(0xFF071E22)
 private val RemoteButtonColor: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF19383C) else Color(0xFFE6F5F3)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF19383C) else Color(0xFFE6F5F3)
 private val RemoteButtonContentColor: Color
     @Composable get() = TealDark
 private val MutedText: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF9CC4C2) else Color(0xFF57777B)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF9CC4C2) else Color(0xFF57777B)
 private val AccentColor: Color
     @Composable get() = TealPrimary
 private val SuccessColor: Color
-    @Composable get() = if (isSystemInDarkTheme()) Color(0xFF62D6A9) else Color(0xFF23775F)
+    @Composable get() = if (LocalConnectTvDarkMode.current) Color(0xFF62D6A9) else Color(0xFF23775F)
 
 private data class Tcl6553ScreenshotResult(
     val bitmap: Bitmap,
