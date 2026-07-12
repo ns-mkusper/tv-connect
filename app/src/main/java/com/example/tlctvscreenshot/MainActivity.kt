@@ -1673,13 +1673,20 @@ private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTa
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(24.dp),
+                .height(32.dp),
             contentAlignment = Alignment.Center
         ) {
             if (label == "Devices") {
-                TvDeviceIcon(size = 22.dp, color = if (selected) TealPrimary else DarkText)
+                TvDeviceIcon(size = 24.dp, color = if (selected) TealPrimary else DarkText)
             } else {
-                Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 24.sp)
+                Text(
+                    icon,
+                    color = if (selected) TealPrimary else DarkText,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp,
+                    lineHeight = 30.sp,
+                    textAlign = TextAlign.Center
+                )
             }
         }
         FittedSingleLineText(
