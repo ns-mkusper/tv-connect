@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -93,6 +94,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.window.Dialog
@@ -335,6 +337,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: Stri
     var showConnectDialog by remember { mutableStateOf(false) }
     var showRemoteDialog by remember { mutableStateOf(false) }
     var showScreenshotSuccess by remember { mutableStateOf(false) }
+    var nowPlayingVolumePercent by remember { mutableStateOf(45) }
     val settingsDrawerState = rememberDrawerState(DrawerValue.Closed)
     var selectedGalleryTab by remember { mutableStateOf("All") }
 
@@ -667,7 +670,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: Stri
                             .fillMaxSize()
                             .testTag("home_root")
                             .verticalScroll(rememberScrollState())
-                            .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 118.dp),
+                            .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 176.dp),
                         verticalArrangement = Arrangement.spacedBy(18.dp)
                     ) {
                         ConnectTvTopBar(
@@ -722,7 +725,19 @@ private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: Stri
                         NowPlayingPanel(
                             previewBitmap = galleryBitmap,
                             connected = connectedToTv,
-                            compact = showScreenshotSuccess
+                            compact = showScreenshotSuccess,
+                            volumePercent = nowPlayingVolumePercent,
+                            onPlayPause = { sendRemoteButton("Play/Pause", TCL_KEY_OK) },
+                            onPrevious = { sendRemoteButton("Previous", TCL_KEY_LEFT) },
+                            onNext = { sendRemoteButton("Next", TCL_KEY_RIGHT) },
+                            onVolumeDown = {
+                                if (connectedToTv) nowPlayingVolumePercent = (nowPlayingVolumePercent - 5).coerceIn(0, 100)
+                                sendRemoteButton("Vol -", TCL_KEY_VOLUME_DOWN)
+                            },
+                            onVolumeUp = {
+                                if (connectedToTv) nowPlayingVolumePercent = (nowPlayingVolumePercent + 5).coerceIn(0, 100)
+                                sendRemoteButton("Vol +", TCL_KEY_VOLUME_UP)
+                            }
                         )
 
                         if (debugModeEnabled) {
@@ -781,7 +796,8 @@ private fun ConnectTvTopBar(
             .testTag("top_status_area"),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("▰", color = TealPrimary, fontSize = 28.sp, fontWeight = FontWeight.Black)
+        TvDeviceIcon(size = 28.dp, color = TealPrimary)
+        Spacer(modifier = Modifier.width(6.dp))
         Text("Connect", color = DarkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("TV", color = TealPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.weight(1f))
@@ -807,6 +823,36 @@ private fun DeviceControlTitle(connected: Boolean, deviceName: String) {
             if (connected) "Connected to: $deviceName" else "Connect to a TV to start controlling it",
             color = MutedText,
             fontSize = 14.sp
+        )
+    }
+}
+
+@Composable
+private fun TvDeviceIcon(size: Dp = 28.dp, color: Color = TealPrimary, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .width(size)
+            .height(size),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .width(size * 0.88f)
+                .height(size * 0.62f)
+                .border(2.dp, color, RoundedCornerShape(2.dp))
+        )
+        Box(
+            modifier = Modifier
+                .width(size * 0.18f)
+                .height(size * 0.12f)
+                .background(color)
+        )
+        Box(
+            modifier = Modifier
+                .width(size * 0.52f)
+                .height(2.dp)
+                .background(color, RoundedCornerShape(2.dp))
         )
     }
 }
@@ -998,7 +1044,17 @@ private fun RecentCapturedContentPanel(
 }
 
 @Composable
-private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean, compact: Boolean = false) {
+private fun NowPlayingPanel(
+    previewBitmap: Bitmap?,
+    connected: Boolean,
+    compact: Boolean = false,
+    volumePercent: Int,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onVolumeDown: () -> Unit,
+    onVolumeUp: () -> Unit
+) {
     Surface(
         modifier = Modifier.fillMaxWidth().testTag("now_playing_panel"),
         color = CardSurface,
@@ -1030,22 +1086,29 @@ private fun NowPlayingPanel(previewBitmap: Bitmap?, connected: Boolean, compact:
                     Text(if (connected) "Netflix" else "Ready when you are", color = MutedText, fontSize = 12.sp)
                 }
                 if (!compact) {
-                    Text("Ⅱ", color = DarkText, fontSize = 20.sp)
-                    Text("◀", color = DarkText, fontSize = 18.sp)
-                    Text("▶", color = DarkText, fontSize = 18.sp)
+                    Text("Ⅱ", color = DarkText, fontSize = 20.sp, modifier = Modifier.clickable(onClick = onPlayPause))
+                    Text("◀", color = DarkText, fontSize = 18.sp, modifier = Modifier.clickable(onClick = onPrevious))
+                    Text("▶", color = DarkText, fontSize = 18.sp, modifier = Modifier.clickable(onClick = onNext))
                 } else {
-                    Text("Ⅱ", color = DarkText, fontSize = 18.sp)
-                    Text("◀", color = DarkText, fontSize = 15.sp)
-                    Text("▶", color = DarkText, fontSize = 15.sp)
+                    Text("Ⅱ", color = DarkText, fontSize = 18.sp, modifier = Modifier.clickable(onClick = onPlayPause))
+                    Text("◀", color = DarkText, fontSize = 15.sp, modifier = Modifier.clickable(onClick = onPrevious))
+                    Text("▶", color = DarkText, fontSize = 15.sp, modifier = Modifier.clickable(onClick = onNext))
                 }
             }
             if (!compact) {
+                val progress = if (connected) volumePercent.coerceIn(0, 100) / 100f else 0f
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("▸", color = DarkText, fontSize = 18.sp)
-                    Box(modifier = Modifier.weight(1f).height(3.dp).background(Color(0xFFB7D1CF), RoundedCornerShape(4.dp))) {
-                        Box(modifier = Modifier.fillMaxWidth(0.48f).height(3.dp).background(TealPrimary, RoundedCornerShape(4.dp)))
+                    Text("▸", color = DarkText, fontSize = 18.sp, modifier = Modifier.clickable(onClick = onVolumeDown))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(3.dp)
+                            .background(Color(0xFFB7D1CF), RoundedCornerShape(4.dp))
+                            .clickable(onClick = onVolumeUp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxWidth(progress).height(3.dp).background(TealPrimary, RoundedCornerShape(4.dp)))
                     }
-                    Text("45%", color = DarkText, fontSize = 12.sp)
+                    Text(if (connected) "$volumePercent%" else "--", color = DarkText, fontSize = 12.sp, modifier = Modifier.clickable(onClick = onVolumeUp))
                 }
             }
         }
@@ -1341,7 +1404,7 @@ private fun GalleryPaneDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(bottom = 84.dp)
+                        .padding(bottom = 148.dp)
                 ) {
                     GalleryPaneTopBar(onDismiss)
                     Text(
@@ -1422,7 +1485,9 @@ private fun GalleryPaneTopBar(onDismiss: () -> Unit) {
 @Composable
 private fun GalleryPaneBottomBar(modifier: Modifier = Modifier, onHomeClick: () -> Unit) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding(),
         color = CardSurface,
         shadowElevation = 8.dp,
         shape = RectangleShape
@@ -1562,6 +1627,7 @@ private fun BottomMediaBar(
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .navigationBarsPadding()
             .testTag("bottom_status_bar")
             .clickable(onClick = statusClick),
         color = CardSurface,
@@ -1604,7 +1670,25 @@ private fun BottomNavItem(icon: String, label: String, selected: Boolean, testTa
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text(icon, color = if (selected) TealPrimary else DarkText, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (label == "Devices") {
+                TvDeviceIcon(size = 24.dp, color = if (selected) TealPrimary else DarkText)
+            } else {
+                Text(
+                    icon,
+                    color = if (selected) TealPrimary else DarkText,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp,
+                    lineHeight = 30.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
         FittedSingleLineText(
             text = label,
             color = if (selected) TealPrimary else DarkText,
@@ -1657,11 +1741,11 @@ private fun SearchingTvIcon(isSearching: Boolean) {
                 .size(haloSize)
                 .alpha(haloAlpha)
                 .testTag("connect_tv_halo"),
-            shape = RectangleShape,
+            shape = RoundedCornerShape(10.dp),
             color = AccentColor,
             content = {}
         )
-        Text("▭", fontSize = 44.sp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
+        TvDeviceIcon(size = 48.dp, color = AccentColor, modifier = Modifier.testTag("connect_tv_icon"))
     }
 }
 
@@ -1763,7 +1847,7 @@ private fun ConnectTvDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(deviceTypeIcon(device.deviceType), fontSize = 28.sp, modifier = Modifier.testTag("device_type_icon"))
+                            TvDeviceIcon(size = 30.dp, color = AccentColor, modifier = Modifier.testTag("device_type_icon"))
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
                                 Text(
