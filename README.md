@@ -2,12 +2,11 @@
 
 Kotlin Android + Jetpack Compose app for standalone screenshot capture and remote-control commands for compatible TCL/TLC TVs.
 
-The runtime app does **not** require the companion app, TV ADB, phone ADB, or a hardcoded TV IP address. It discovers TVs on the local network and captures directly over the decoded TCL TV protocols.
 
 ## App behavior
 
 1. Tap **Discover TV**.
-2. The app sends TCL UDP discovery packets on port `6537` (`0x1989`).
+2. The app sends  UDP discovery packets on port `6537` (`0x1989`).
 3. It verifies candidates with the TV TCP control port `6553` using a plain `159>>{phoneName}>>1>>{uuid}>>1` handshake.
 4. If UDP discovery is missed or blocked, it falls back to a local `/24` TCP `6553` scan.
 5. The selected TV card shows the remembered name, IP address, MAC address, discovery source, protocol algorithm, and last verification time.
