@@ -2299,7 +2299,7 @@ private fun screenshotDirectory(context: Context): File = File(context.filesDir,
 private fun captureFilename(nowMillis: Long, extension: String): String {
     val safeExtension = extension.lowercase().ifBlank { "bin" }
     val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
-    return "tcl-tv-screenshot_$timestamp.$safeExtension"
+    return "screenshot_$timestamp.$safeExtension"
 }
 
 private fun uniqueCaptureFile(directory: File, nowMillis: Long, extension: String): File {
@@ -2310,7 +2310,7 @@ private fun uniqueCaptureFile(directory: File, nowMillis: Long, extension: Strin
     val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss-SSS_Z", Locale.US).format(Date(nowMillis))
     var suffix = 2
     while (true) {
-        val candidate = File(directory, "tcl-tv-screenshot_${timestamp}_$suffix.$safeExtension")
+        val candidate = File(directory, "screenshot_${timestamp}_$suffix.$safeExtension")
         if (!candidate.exists()) return candidate
         suffix++
     }
