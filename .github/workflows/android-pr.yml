@@ -42,4 +42,4 @@ jobs:
           if-no-files-found: error
 
       - name: Run mock target benchmark tests
-        run: ./gradlew :app:testDebugUnitTest --tests "com.example.tlctvscreenshot.MockTargetBenchmarkTest" -Dtvconnect.benchmarks=true --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --tests "com.bydlosoft.connecttv.MockTargetBenchmarkTest" -Dtvconnect.benchmarks=true --stacktrace

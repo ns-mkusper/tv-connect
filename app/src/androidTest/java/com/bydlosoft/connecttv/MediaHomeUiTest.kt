@@ -1,4 +1,4 @@
-package com.example.tlctvscreenshot
+package com.bydlosoft.connecttv
 
 import android.content.Context
 import android.content.Intent
@@ -50,7 +50,7 @@ class MediaHomeUiTest {
         clearPersistentUiTestState(context)
 
         val intent = Intent(context, MainActivity::class.java)
-            .putExtra("com.example.tlctvscreenshot.UI_TEST_MODE", true)
+            .putExtra("com.bydlosoft.connecttv.UI_TEST_MODE", true)
         scenario = ActivityScenario.launch(intent)
         composeRule.waitForIdle()
     }

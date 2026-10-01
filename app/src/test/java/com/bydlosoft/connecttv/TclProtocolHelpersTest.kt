@@ -1,4 +1,4 @@
-package com.example.tlctvscreenshot
+package com.bydlosoft.connecttv
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TclProtocolHelpersTest {
-    private val helpers = Class.forName("com.example.tlctvscreenshot.MainActivityKt")
+    private val helpers = Class.forName("com.bydlosoft.connecttv.MainActivityKt")
 
     private data class RemoteButtonExpectation(
         val label: String,
@@ -153,7 +153,7 @@ class TclProtocolHelpersTest {
 
     @Test
     fun fastCaptureUiStatusShowsReadyAndDisconnectedStates() {
-        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+        val constants = Class.forName("com.bydlosoft.connecttv.Tcl6553SessionState").enumConstants
             ?: error("Expected enum constants")
         val ready = constants.single { (it as Enum<*>).name == "READY" }
 
@@ -170,7 +170,7 @@ class TclProtocolHelpersTest {
 
     @Test
     fun fastCaptureUiStatusShowsPreparingAndFallbackStates() {
-        val constants = Class.forName("com.example.tlctvscreenshot.Tcl6553SessionState").enumConstants
+        val constants = Class.forName("com.bydlosoft.connecttv.Tcl6553SessionState").enumConstants
             ?: error("Expected enum constants")
         val warming = constants.single { (it as Enum<*>).name == "WARMING" }
         val fallback = constants.single { (it as Enum<*>).name == "FALLBACK_ONLY" }
@@ -188,7 +188,7 @@ class TclProtocolHelpersTest {
 
     @Test
     fun captureTimingSummaryShowsTotalAndBars() {
-        val segmentClass = Class.forName("com.example.tlctvscreenshot.TclCaptureTimingSegment")
+        val segmentClass = Class.forName("com.bydlosoft.connecttv.TclCaptureTimingSegment")
         val constructor = segmentClass.declaredConstructors.single()
         constructor.isAccessible = true
         val segments = listOf(

@@ -5,7 +5,7 @@ set -euo pipefail
 
 APK=${APK:-app/build/outputs/apk/debug/app-debug.apk}
 OUT=${OUT:-captures/compose-workbench-emulator.png}
-PACKAGE=${PACKAGE:-com.example.tlctvscreenshot}
+PACKAGE=${PACKAGE:-com.bydlosoft.connecttv}
 ACTIVITY=${ACTIVITY:-.MainActivity}
 LABEL=${LABEL:-compose-workbench}
 UI_THEME=${UI_THEME:-}
@@ -24,7 +24,7 @@ adb shell am force-stop "$PACKAGE" || true
 if [[ "$UI_TEST_MODE" == "1" ]]; then
   start_args=(
     -n "$PACKAGE/$ACTIVITY"
-    --ez com.example.tlctvscreenshot.UI_TEST_MODE true
+    --ez com.bydlosoft.connecttv.UI_TEST_MODE true
     --es screenshot_label "$LABEL"
   )
   if [[ -n "$UI_THEME" ]]; then

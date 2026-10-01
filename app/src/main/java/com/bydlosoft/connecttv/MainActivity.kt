@@ -1,4 +1,4 @@
-package com.example.tlctvscreenshot
+package com.bydlosoft.connecttv
 
 import android.content.ContentValues
 import android.content.Context
@@ -170,7 +170,7 @@ private const val TCL_SESSION_HEARTBEAT_INTERVAL_MS = 15_000L
 private const val TCL_SESSION_RETRY_DELAY_MS = 2_000L
 private const val MAX_SCREENSHOT_BYTES = 25 * 1024 * 1024
 private const val MAX_TCL_PACKET_BYTES = 1024 * 1024
-private const val LOG_TAG = "TlcTvCapture"
+private const val LOG_TAG = "ConnectTvCapture"
 
 private const val TCL_REMOTE_KEY_COMMAND = 149
 private const val TCL_KEY_UP = 11
@@ -250,7 +250,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            TlcTvScreenshotApp(
+            ConnectTvApp(
                 testMode = isAppDebuggable() && intent.getBooleanExtra(EXTRA_UI_TEST_MODE, false),
                 screenshotLabel = intent.getStringExtra(EXTRA_SCREENSHOT_LABEL).orEmpty(),
                 forcedDarkMode = when (intent.getStringExtra(EXTRA_UI_THEME)?.lowercase(Locale.US)) {
@@ -266,14 +266,14 @@ class MainActivity : ComponentActivity() {
         (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 }
 
-private const val EXTRA_UI_TEST_MODE = "com.example.tlctvscreenshot.UI_TEST_MODE"
+private const val EXTRA_UI_TEST_MODE = "com.bydlosoft.connecttv.UI_TEST_MODE"
 private const val EXTRA_SCREENSHOT_LABEL = "screenshot_label"
 private const val EXTRA_UI_THEME = "ui_theme"
 
 private val LocalConnectTvDarkMode = staticCompositionLocalOf { false }
 
 @Composable
-private fun TlcTvScreenshotApp(
+private fun ConnectTvApp(
     testMode: Boolean = false,
     screenshotLabel: String = "",
     forcedDarkMode: Boolean? = null
@@ -1807,7 +1807,7 @@ private fun ConnectTvDialog(
                 }
 
                 selectedDevice?.let { current ->
-                    Text("Selected: ${current.name.ifBlank { "TCL TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
+                    Text("Selected: ${current.name.ifBlank { "TV" }} — ${current.ip}", fontWeight = FontWeight.Bold)
                     Text("Last verified: ${formatTimestamp(current.lastVerifiedAtMillis)}", style = MaterialTheme.typography.bodySmall)
                 } ?: Text("No TV selected.", color = AccentColor, fontWeight = FontWeight.Bold)
 
@@ -1849,7 +1849,7 @@ private fun ConnectTvDialog(
                         ) {
                             TvDeviceIcon(size = 30.dp, color = AccentColor, modifier = Modifier.testTag("device_type_icon"))
                             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("${device.name.ifBlank { "TCL TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
+                                Text("${device.name.ifBlank { "TV" }} — ${device.ip}", fontWeight = FontWeight.Bold)
                                 Text(
                                     listOfNotNull(
                                         device.deviceType.ifBlank { "TV" },
@@ -2264,7 +2264,7 @@ private suspend fun exportScreenshotToPictures(context: Context, file: File): Ur
         put(MediaStore.Images.Media.DATE_ADDED, nowMillis / 1_000L)
         put(MediaStore.Images.Media.DATE_MODIFIED, nowMillis / 1_000L)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/TCL TV Screenshot")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ConnectTV")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }
@@ -2330,7 +2330,7 @@ private fun currentWifiDisplayName(context: Context): String {
 }
 
 private fun deviceTypeIcon(deviceType: String): String = when (deviceType.trim().uppercase()) {
-    "TV", "TCL TV" -> "▭"
+    "TV" -> "▭"
     "SPEAKER", "AUDIO" -> "♪"
     "PHONE" -> "▯"
     else -> "•"
@@ -2559,7 +2559,7 @@ private fun verifyTcl6553Device(ip: String, phoneName: String, uuid: String): Tc
             val fields = handshake.split(">>")
             TclDiscoveryDevice(
                 ip = ip,
-                name = fields.getOrNull(1).orEmpty().ifBlank { "TCL TV" },
+                name = fields.getOrNull(1).orEmpty().ifBlank { "TV" },
                 source = "scan+tcp6553",
                 algorithmType = fields.getOrNull(6),
                 handshake = handshake
@@ -3367,6 +3367,6 @@ private fun imageExtension(bytes: ByteArray): String = when {
 
 @Preview(showBackground = true)
 @Composable
-private fun ScreenshotWorkbenchPreview() {
-    TlcTvScreenshotApp()
+private fun ConnectTvAppPreview() {
+    ConnectTvApp()
 }

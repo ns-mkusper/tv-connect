@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.tlctvscreenshot"
+    namespace = "com.bydlosoft.connecttv"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.tlctvscreenshot"
+        applicationId = "com.bydlosoft.connecttv"
         minSdk = 26
         targetSdk = 35
         versionCode = 1

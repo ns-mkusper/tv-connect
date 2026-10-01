@@ -1,4 +1,4 @@
-package com.example.tlctvscreenshot
+package com.bydlosoft.connecttv
 
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -22,7 +22,7 @@ import org.junit.Before
 import org.junit.Test
 
 class MockTargetBenchmarkTest {
-    private val helpers = Class.forName("com.example.tlctvscreenshot.MainActivityKt")
+    private val helpers = Class.forName("com.bydlosoft.connecttv.MainActivityKt")
     private val pngBytes = Base64.getDecoder().decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lwQnWQAAAABJRU5ErkJggg=="
     )

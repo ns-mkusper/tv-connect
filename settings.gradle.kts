@@ -13,5 +13,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TlcTvScreenshot"
+rootProject.name = "ConnectTv"
 include(":app")
