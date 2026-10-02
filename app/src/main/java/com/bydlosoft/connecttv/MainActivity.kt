@@ -320,7 +320,7 @@ private fun ScreenshotWorkbench(testMode: Boolean = false, screenshotLabel: Stri
     var isCapturingTcl by remember { mutableStateOf(false) }
     var activeRemoteSends by remember { mutableStateOf(0) }
     var discoveredDevices by remember { mutableStateOf<List<TclDiscoveryDevice>>(emptyList()) }
-    var discoveryStatus by remember { mutableStateOf("Open Connect TV to search for nearby TVs on this network.") }
+    var discoveryStatus by remember { mutableStateOf("Open TV Connect to search for nearby TVs on this network.") }
     var isDiscovering by remember { mutableStateOf(false) }
     var currentWifiName by remember { mutableStateOf(if (testMode) "Test Wi-Fi" else currentWifiDisplayName(context)) }
     var screenshots by remember { mutableStateOf(loadScreenshotFiles(context)) }
@@ -798,8 +798,9 @@ private fun ConnectTvTopBar(
     ) {
         TvDeviceIcon(size = 28.dp, color = TealPrimary)
         Spacer(modifier = Modifier.width(6.dp))
-        Text("Connect", color = DarkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("TV", color = TealPrimary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text("Connect", color = DarkText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.weight(1f))
         Text("♧", color = DarkText, fontSize = 22.sp, modifier = Modifier.padding(end = 16.dp))
         Box(
@@ -2264,7 +2265,7 @@ private suspend fun exportScreenshotToPictures(context: Context, file: File): Ur
         put(MediaStore.Images.Media.DATE_ADDED, nowMillis / 1_000L)
         put(MediaStore.Images.Media.DATE_MODIFIED, nowMillis / 1_000L)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/ConnectTV")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/TV Connect")
             put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }

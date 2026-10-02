@@ -48,7 +48,7 @@ Key codes:
 
 ## Storage
 
-Captures are saved in app-private storage, listed after restart, and shared through a content URI rather than a file path. Exports land in `Pictures/ConnectTV`.
+Captures are saved in app-private storage, listed after restart, and shared through a content URI rather than a file path. Exports land in `Pictures/TV Connect`.
 
 ## Limits
 
